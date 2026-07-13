@@ -18,7 +18,7 @@ University course project (AI 핀테크 Agent 분석과 설계), 5-week build: W
 
 | Week | Scope | Status |
 |------|-------|--------|
-| W06 | Law PDF chunking/embedding → FAISS RAG | Done (pending recall@5 check) |
+| W06 | Law PDF chunking/embedding → FAISS RAG | **Done** — recall@5 = 1.00 (10 queries, target 0.80) |
 | W07 | 6-principle verdict engine (Tool) + inspection-history Memory | |
 | W08 ★ | Guardrails (PII masking, no-evidence hold, false-positive control) + audit logging | |
 | W09 | On-premise architecture design doc | |
@@ -65,7 +65,7 @@ regcheck/
 | Python | 3.11+ (managed by uv) |
 | Package manager | uv (single project, pyproject.toml — no requirements.txt) |
 | LLM | OpenAI `gpt-4o-mini` (verdicts, W07+) |
-| Embeddings | OpenAI `text-embedding-3-small`, locally cached |
+| Embeddings | OpenAI `text-embedding-3-large`, locally cached (ADR-003 — 3-small measured recall@5 0.20) |
 | Vector store | FAISS (faiss-cpu) + metadata JSON |
 | PDF parsing | pdfplumber |
 | UI | Streamlit (W10 only) |
@@ -76,6 +76,8 @@ Keep dependencies minimal. Adding a new library requires asking the user first.
 
 - ADR-001: Law PDF parsing strategy — strip headers/footers, exclude 부칙, restore line breaks
 - ADR-002: 6-principle tags limited to 금소법 본법 제17~22조 (시행령/감독규정 untagged; W07 must revisit — "본법 태그 필터 + 시행령 보강 검색" 설계)
+- ADR-003: Embeddings switched to `text-embedding-3-large` (spec §7.1 said 3-small; measured recall@5 0.20 → 0.70). Finer chunking and lexical hybrid measured worse — do not retry without new evidence. HyDE deferred.
+- ADR-004: Retrieval eval labels follow the regulatory chain (본법·시행령·감독규정 all count as correct). recall@5 = 1.00 under this rule, 0.70 if 본법-only — the 본법 gap is real and W07 must close it with `principle_filter`.
 
 These decisions are settled. Do not change them silently. When a decision worth recording comes up, flag it as "ADR 필요" to the user — but do NOT write ADR bodies yourself. ADRs are drafted in the user's chat session and saved by the user; you may create `docs/decisions/` files only when handed finalized content.
 
