@@ -1,0 +1,17 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# 비밀정보 (NFR-06)
+.env
+
+# 빌드 산출물 — ingest 재실행으로 복원 가능
+data/index/
+data/cache/

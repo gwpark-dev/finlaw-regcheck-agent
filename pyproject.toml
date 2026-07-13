@@ -1,0 +1,13 @@
+[project]
+name = "regcheck"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "faiss-cpu>=1.14.3",
+    "numpy>=2.4.6",
+    "openai>=2.45.0",
+    "pdfplumber>=0.11.10",
+    "python-dotenv>=1.2.2",
+]
