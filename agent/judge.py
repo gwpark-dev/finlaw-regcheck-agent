@@ -27,6 +27,11 @@ from rag.retriever import chunks_by_principle, search
 JUDGE_MODEL = "gpt-4o-mini"
 PROMPT_PATH = ROOT / "agent" / "prompts" / "judge_v1.0.md"
 
+# temperature=0으로도 판정이 재현되지 않았다(동일 30문항 재실행 시 180셀 중 10셀 뒤집힘).
+# seed를 고정하고 응답의 system_fingerprint를 meta에 남겨, 결과가 달라졌을 때
+# "모델 쪽이 바뀐 것"인지 구분할 수 있게 한다 (NFR-07).
+SEED = 20260713
+
 # 하위규정 보강 검색: 청크 SEARCH_DEPTH개를 뽑아 조(條) 단위로 접은 뒤 상위 SUPPLEMENT_K개.
 # 한 조가 여러 항으로 쪼개져 있어(제22조는 7개 항) 청크를 그대로 쓰면 형제 항들이
 # 자리를 다 차지한다.
@@ -89,6 +94,89 @@ VERDICT_SCHEMA = {
         "confidence",
         "suggestion",
     ],
+    "additionalProperties": False,
+}
+
+
+# --- v2.0: 2단 구성요건 판정 --------------------------------------------------
+#
+# 1단(LLM): 조문이 열거한 구성요건을 항목별로 해당/미해당/판단불가 판정 + 근거 문구 인용.
+# 2단(코드): 1단 결과'만'으로 verdict를 결정한다. LLM에게 verdict를 묻지 않는다.
+#
+# v1.0의 실패는 모델이 "문구가 나쁘다 → 이 원칙도 위반" 식으로 하나의 행위를 6개 원칙에
+# 돌려쓴 것이었다. verdict를 코드가 계산하면 그 경로가 구조적으로 막힌다 — 모델이 특정
+# 구성요건을 문구 인용과 함께 지목하지 못하면 VIOLATION이 나올 수 없다.
+
+CHECK_STATUS = ("해당", "미해당", "판단불가")
+
+# 조문이 상품군을 명시해 한정한 구성요건. 해당 상품군이 아니면 성립할 수 없으므로
+# 2단(코드)에서 강제로 미해당 처리한다 — 모델이 "보장성 광고 요건 누락"을 펀드 광고에
+# 갖다 붙이는 오답이 실측됐다. 조문의 문언을 코드로 옮긴 것이지 휴리스틱이 아니다.
+#   투자성=펀드 / 보장성=보험 / 대출성=대출 / 예금성=예금
+ELEMENT_PRODUCT_SCOPE = {
+    "D1": {"대출"},   # 꺾기 — 대출성 상품 계약체결과 관련
+    "D4": {"대출"},   # 대출 상환방식 강요
+    "D5": {"대출"},   # 중도상환수수료
+    "D6": {"대출"},   # 개인 대출 제3자 연대보증
+    "E5": {"보험"},   # 제21조5호 — 보장성 상품의 경우
+    "E6": {"펀드"},   # 제21조6호가 — 투자성 상품의 경우 (불초청 권유)
+    "E7": {"펀드"},   # 제21조6호나 — 투자성 상품의 경우 (거부 후 재권유)
+    "F3": {"펀드"},   # 제22조3항3호나 — 투자성
+    "F4": {"보험"},   # 제22조3항3호가 — 보장성
+    "F5": {"대출"},   # 제22조3항3호라 — 대출성
+    "F6": {"예금"},   # 제22조3항3호다 — 예금성
+    "F8": {"펀드"},   # 제22조4항2호 — 투자성
+    "F9": {"보험"},   # 제22조4항1호 — 보장성
+    "F10": {"대출"},  # 제22조4항4호 — 대출성
+    "F11": {"예금"},  # 제22조4항3호 — 예금성
+}
+
+V2_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "scope": {
+            "type": "string",
+            "description": "이 문구가 해당 원칙의 적용 국면인지에 대한 판단 근거.",
+        },
+        "applicable": {
+            "type": "boolean",
+            "description": "적용 국면이면 true. false면 verdict는 OK로 확정된다.",
+        },
+        "checks": {
+            "type": "array",
+            "description": "제시된 구성요건 목록 전부에 대해 각각 하나씩. 빠뜨리지 말 것.",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "finding": {"type": "string"},
+                    "quote": {
+                        "type": "string",
+                        "description": "근거가 되는 문구를 원문 그대로. 없으면 빈 문자열.",
+                    },
+                    "status": {"type": "string", "enum": list(CHECK_STATUS)},
+                    "confidence": {"type": "number"},
+                },
+                "required": ["id", "finding", "quote", "status", "confidence"],
+                "additionalProperties": False,
+            },
+        },
+        "evidence": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "law": {"type": "string"},
+                    "article": {"type": "string"},
+                    "quote": {"type": "string"},
+                },
+                "required": ["law", "article", "quote"],
+                "additionalProperties": False,
+            },
+        },
+        "suggestion": {"type": "string"},
+    },
+    "required": ["scope", "applicable", "checks", "evidence", "suggestion"],
     "additionalProperties": False,
 }
 
@@ -207,6 +295,43 @@ def _validate(data: dict, principle: str) -> None:
             raise JudgeError(f"[{principle}] evidence 항목 필드 누락")
 
 
+def _call(
+    client: OpenAI,
+    model: str,
+    system: str,
+    user: str,
+    schema: dict,
+    name: str,
+    seed: int | None,
+    principle: str,
+    usage: dict,
+) -> dict:
+    """LLM 1회 호출 → 검증된 JSON. 토큰·fingerprint를 usage에 누적한다."""
+    response = client.chat.completions.create(
+        model=model,
+        temperature=0,  # 판정은 재현 가능해야 한다 (NFR-07)
+        seed=seed,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        response_format={
+            "type": "json_schema",
+            "json_schema": {"name": name, "strict": True, "schema": schema},
+        },
+    )
+    u = response.usage
+    usage["prompt_tokens"] += u.prompt_tokens
+    usage["completion_tokens"] += u.completion_tokens
+    if response.system_fingerprint:
+        usage["fingerprints"].add(response.system_fingerprint)
+
+    try:
+        return json.loads(response.choices[0].message.content)
+    except (TypeError, json.JSONDecodeError) as e:
+        raise JudgeError(f"[{principle}] JSON 파싱 실패: {e}") from e
+
+
 def judge_principle(
     client: OpenAI,
     text: str,
@@ -214,8 +339,11 @@ def judge_principle(
     principle: str,
     prompts: dict[str, str],
     context: str,
+    model: str = JUDGE_MODEL,
+    seed: int | None = SEED,
+    usage: dict | None = None,
 ) -> dict:
-    """원칙 1개 판정 → 명세서 §7.3 verdicts[] 항목 1개."""
+    """v1.0 — 원칙 1개 판정 → 명세서 §7.3 verdicts[] 항목 1개."""
     user = render(
         prompts["USER"],
         principle=principle,
@@ -226,29 +354,10 @@ def judge_principle(
         context=context,
         text=text,
     )
-
-    response = client.chat.completions.create(
-        model=JUDGE_MODEL,
-        temperature=0,  # 판정은 재현 가능해야 한다 (NFR-07)
-        messages=[
-            {"role": "system", "content": prompts["SYSTEM"]},
-            {"role": "user", "content": user},
-        ],
-        response_format={
-            "type": "json_schema",
-            "json_schema": {
-                "name": "principle_verdict",
-                "strict": True,
-                "schema": VERDICT_SCHEMA,
-            },
-        },
+    data = _call(
+        client, model, prompts["SYSTEM"], user, VERDICT_SCHEMA,
+        "principle_verdict", seed, principle, usage if usage is not None else _new_usage(),
     )
-
-    content = response.choices[0].message.content
-    try:
-        data = json.loads(content)
-    except (TypeError, json.JSONDecodeError) as e:
-        raise JudgeError(f"[{principle}] JSON 파싱 실패: {e}") from e
     _validate(data, principle)
 
     # 명세서 §7.3: evidence가 비면 verdict는 자동으로 NEEDS_REVIEW (NFR-02/03 강제).
@@ -269,24 +378,143 @@ def judge_principle(
     }
 
 
-def judge(text: str, parallel: bool = True) -> dict:
+def judge_principle_v2(
+    client: OpenAI,
+    text: str,
+    cls: dict,
+    principle: str,
+    prompts: dict[str, str],
+    context: str,
+    model: str = JUDGE_MODEL,
+    seed: int | None = SEED,
+    usage: dict | None = None,
+) -> dict:
+    """v2.0 — 1단(LLM 구성요건 판정) → 2단(코드 verdict 결정)."""
+    user = render(
+        prompts["USER"],
+        principle=principle,
+        article=ARTICLE_OF[principle],
+        checklist=prompts[f"CHECKLIST:{principle}"],
+        input_type=cls["type"],
+        product=cls["product"],
+        context=context,
+        text=text,
+    )
+    data = _call(
+        client, model, prompts["SYSTEM"], user, V2_SCHEMA,
+        "principle_elements", seed, principle, usage if usage is not None else _new_usage(),
+    )
+    _validate_v2(data, principle)
+    return _decide(data, principle, cls["product"])
+
+
+def _validate_v2(data: dict, principle: str) -> None:
+    for key in V2_SCHEMA["required"]:
+        if key not in data:
+            raise JudgeError(f"[{principle}] 필드 누락: {key}")
+    if not isinstance(data["applicable"], bool):
+        raise JudgeError(f"[{principle}] applicable이 bool이 아님")
+    for c in data["checks"]:
+        if c["status"] not in CHECK_STATUS:
+            raise JudgeError(f"[{principle}] 알 수 없는 status: {c['status']}")
+
+
+def _out_of_scope(check: dict, product: str) -> bool:
+    """조문이 상품군을 한정한 구성요건인데 상품군이 다르면, 성립할 수 없다."""
+    scope = ELEMENT_PRODUCT_SCOPE.get(check["id"])
+    # 상품군을 모르면(기타) 억제하지 않는다 — 판단을 모델에게 남긴다.
+    return bool(scope) and product != "기타" and product not in scope
+
+
+def _decide(data: dict, principle: str, product: str) -> dict:
+    """2단 — 1단의 구성요건 판정 결과'만' 보고 verdict를 계산한다.
+
+    LLM은 여기에 관여하지 않는다. 원문을 다시 읽지 않으므로 "문구가 나쁘니 이 원칙도
+    위반"이라는 비약이 구조적으로 불가능하다.
+    """
+    checks = data["checks"]
+    suppressed = [c for c in checks if _out_of_scope(c, product)]
+    checks = [c for c in checks if not _out_of_scope(c, product)]
+    matched = [c for c in checks if c["status"] == "해당"]
+    unclear = [c for c in checks if c["status"] == "판단불가"]
+
+    def conf(items: list[dict], default: float) -> float:
+        return max((c["confidence"] for c in items), default=default)
+
+    if not data["applicable"]:
+        verdict = "OK"
+        confidence = 1.0
+        reason = f"이 원칙의 적용 국면이 아님 — {data['scope']}"
+    elif matched:
+        verdict = "VIOLATION"
+        confidence = conf(matched, 0.5)
+        parts = [f"[{c['id']}] {c['finding']} (인용: \"{c['quote']}\")" for c in matched]
+        reason = "구성요건 충족: " + " / ".join(parts)
+    elif unclear:
+        verdict = "NEEDS_REVIEW"
+        confidence = conf(unclear, 0.5)
+        parts = [f"[{c['id']}] {c['finding']}" for c in unclear]
+        reason = "판단불가 구성요건 있음 → 사람 검토 필요: " + " / ".join(parts)
+    else:
+        verdict = "OK"
+        confidence = min((c["confidence"] for c in checks), default=1.0)
+        reason = "적용 국면이나 조문이 열거한 구성요건 중 해당하는 것이 없음"
+
+    dropped = [c["id"] for c in suppressed if c["status"] == "해당"]
+    if dropped:
+        reason += f" (상품군 불일치로 제외된 구성요건: {', '.join(dropped)} — {product} 상품에 적용되지 않음)"
+
+    # 명세서 §7.3: evidence가 비면 판정 보류 (NFR-02/03)
+    evidence = data["evidence"]
+    if not evidence:
+        verdict = "NEEDS_REVIEW"
+        reason = f"근거 조항 인용 없음 → 판정 보류. (사유: {reason})"
+
+    return {
+        "principle": principle,
+        "verdict": verdict,
+        "confidence": confidence,
+        "evidence": evidence,
+        "reason": reason,
+        "suggestion": data["suggestion"] if verdict == "VIOLATION" else "",
+    }
+
+
+def _new_usage() -> dict:
+    return {"prompt_tokens": 0, "completion_tokens": 0, "fingerprints": set()}
+
+
+def judge(
+    text: str,
+    parallel: bool = True,
+    model: str = JUDGE_MODEL,
+    prompt_path: Path = PROMPT_PATH,
+    cls_override: dict | None = None,
+    seed: int | None = SEED,
+) -> dict:
     """문구 1건 → 6대 원칙 판정 리포트 (명세서 §7.3 스키마).
 
     parallel=False면 원칙별 호출을 순차 실행한다(디버깅·지연 측정용).
+    prompt_path의 버전이 v2로 시작하면 2단 구성요건 판정 구조를 쓴다.
+    cls_override: 유형 분류를 주입한다. 분류기 오류가 판정에 미치는 영향을 분리 측정할 때 쓴다.
     """
     load_dotenv(ROOT / ".env")  # NFR-06: 키는 .env에서만
     client = OpenAI()
-    prompts = load_prompt()
-    cls = classify(text)
+    prompts = load_prompt(prompt_path)
+    version = prompt_version(prompt_path)
+    cls = cls_override or classify(text)
+    judge_one = judge_principle_v2 if version.startswith("v2") else judge_principle
 
     # 컨텍스트 구성(= 검색)은 순차로 돌린다. 검색은 질의를 임베딩하며 임베딩 캐시
     # 파일을 갱신하는데, 이를 병렬로 부르면 스레드들이 같은 파일을 동시에 덮어써
     # 캐시가 깨진다(실제로 겪음). 병렬화가 필요한 건 느린 쪽 — LLM 호출뿐이다.
     contexts = {p: build_context(text, p)[0] for p in PRINCIPLE_ORDER}
+    usage = _new_usage()
 
     def run(principle: str) -> dict:
-        return judge_principle(
-            client, text, cls, principle, prompts, contexts[principle]
+        return judge_one(
+            client, text, cls, principle, prompts, contexts[principle],
+            model=model, seed=seed, usage=usage,
         )
 
     if parallel:
@@ -301,10 +529,14 @@ def judge(text: str, parallel: bool = True) -> dict:
         "product_category": cls["product"],
         "verdicts": verdicts,
         "meta": {  # NFR-07 재현성
-            "model": JUDGE_MODEL,
+            "model": model,
             "embedding": EMBEDDING_MODEL,
-            "prompt_version": prompt_version(),
+            "prompt_version": version,
             "timestamp": datetime.now(timezone.utc).isoformat(),
+            "seed": seed,
+            "system_fingerprint": sorted(usage["fingerprints"]),
+            "prompt_tokens": usage["prompt_tokens"],
+            "completion_tokens": usage["completion_tokens"],
         },
     }
 

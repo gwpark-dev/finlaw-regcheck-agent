@@ -18,3 +18,6 @@ data/cache/
 
 # 점검 이력 — 런타임 산출물 (감사 로그는 W08에서 별도 설계)
 data/history/
+
+# 실험 산출물 — judge_experiment.py 재실행으로 복원 가능
+data/eval/experiments/
