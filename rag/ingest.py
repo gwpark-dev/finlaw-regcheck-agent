@@ -34,6 +34,7 @@ from rag.config import (
     META_PATH,
     PRINCIPLE_SOURCE,
     PRINCIPLES,
+    ROOT,
 )
 
 # --- 원문 파싱용 정규식 -------------------------------------------------------
@@ -237,7 +238,8 @@ def embed_texts(texts: list[str], model: str = EMBEDDING_MODEL) -> list[list[flo
     todo = [(k, t) for k, t in zip(keys, texts) if k not in cache]
 
     if todo:
-        load_dotenv()  # API 키는 .env에서만 읽는다 (NFR-06)
+        # API 키는 .env에서만 읽는다 (NFR-06). 경로를 명시해야 실행 위치와 무관하게 찾는다.
+        load_dotenv(ROOT / ".env")
         client = OpenAI()
         for i in range(0, len(todo), EMBEDDING_BATCH):
             batch = todo[i : i + EMBEDDING_BATCH]

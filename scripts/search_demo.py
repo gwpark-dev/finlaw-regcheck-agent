@@ -53,9 +53,32 @@ def format_hit(hit: dict) -> str:
     )
 
 
+def top_articles(query: str, k: int, principle: str | None) -> list[dict]:
+    """조(條) 단위 Top-k.
+
+    인용의 단위는 청크가 아니라 조항이다. 한 조가 여러 항으로 쪼개진 경우(예: 제22조는
+    7개 항) 그 형제 청크들이 Top-k 자리를 다 차지해 버리므로, 조마다 최고 점수 청크만
+    대표로 남긴다.
+    """
+    hits = search(query, k=k * 8, principle_filter=principle)
+
+    seen: set[tuple[str, str | None]] = set()
+    out: list[dict] = []
+    for hit in hits:
+        key = (hit["source_file"], hit["article"])
+        if key in seen:
+            continue
+        seen.add(key)
+        hit["rank"] = len(out) + 1
+        out.append(hit)
+        if len(out) == k:
+            break
+    return out
+
+
 def run_one(query: str, k: int, principle: str | None, expected: list[str]) -> bool:
-    """질의 1건 실행 → Top-k 출력. 기대조항이 있으면 hit 여부를 반환."""
-    hits = search(query, k=k, principle_filter=principle)
+    """질의 1건 실행 → Top-k 조항 출력. 기대조항이 있으면 hit 여부를 반환."""
+    hits = top_articles(query, k, principle)
 
     print("─" * LINE_WIDTH)
     print(f"Q: {query}")
