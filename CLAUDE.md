@@ -19,10 +19,21 @@ University course project (AI 핀테크 Agent 분석과 설계), 5-week build: W
 | Week | Scope | Status |
 |------|-------|--------|
 | W06 | Law PDF chunking/embedding → FAISS RAG | **Done** — recall@5 = 1.00 (10 queries, target 0.80) |
-| W07 | 6-principle verdict engine (Tool) + inspection-history Memory | |
+| W07 | 6-principle verdict engine (Tool) + inspection-history Memory | **구현 완료 / 정확도 확정 대기** — 스키마 준수 100%, 1건 9.9초(NFR-01 30초). 정확도는 평가셋 라벨 검수 후 재실행하여 기록. 잠정 측정에서 **오탐 과다**가 확인됨 (아래) |
 | W08 ★ | Guardrails (PII masking, no-evidence hold, false-positive control) + audit logging | |
 | W09 | On-premise architecture design doc | |
 | W10 | Streamlit demo | |
+
+**W07 미해결 이슈 — 판정 오탐 (W08 최우선)**
+
+gpt-4o-mini가 문구에 문제가 하나라도 보이면 6대 원칙에 폭넓게 VIOLATION을 찍는다.
+잠정 라벨 기준 측정에서 위반 재현율은 100%였으나 정상 라벨의 상당수를 위반으로 판정했다.
+프롬프트로 억제를 시도했으나(적용 국면 게이트, 열거 행위 매칭 강제, few-shot) 한계가 있었다.
+심각한 사례: **문구에 명시적으로 있는 문장을 "누락"이라고 판정**한다(w07-029/030의 설명서
+열람 권유). 판단이 아니라 독해 실패다.
+
+FR-09(신뢰도 임계값 보류)와 모델 상향은 W08에서 데이터를 갖고 결정한다.
+평가셋 라벨은 `data/eval/labeling_criteria.md` §4의 쟁점 4건 검수 후 확정한다.
 
 ---
 
