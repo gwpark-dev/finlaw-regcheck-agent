@@ -36,12 +36,27 @@ def _load() -> tuple[faiss.Index, dict]:
     return _index, _meta
 
 
+def chunks_by_principle(principle: str) -> list[dict]:
+    """해당 원칙 태그가 붙은 청크 전부를 색인 순서(= 조·항 순서)대로 반환.
+
+    검색을 거치지 않는 결정적(deterministic) 조회다. 판정 엔진이 본법 조항을 유사도
+    순위와 무관하게 항상 확보하기 위해 쓴다 (ADR-005).
+    """
+    _, meta = _load()
+    return [c for c in meta["chunks"] if c["principle"] == principle]
+
+
 def search(
-    query: str, k: int = 5, principle_filter: str | None = None
+    query: str,
+    k: int = 5,
+    principle_filter: str | None = None,
+    exclude_chunk_ids: set[str] | None = None,
 ) -> list[dict]:
     """질의와 코사인 유사도가 높은 조항 청크 Top-k.
 
     principle_filter: "광고 규제" 등 6대 원칙명. 지정 시 해당 태그 청크만 대상.
+    exclude_chunk_ids: 제외할 chunk_id 집합. 판정 엔진이 이미 고정 주입한 본법 청크를
+      보강 검색 결과에서 빼 중복을 막는 데 쓴다 (ADR-005).
     반환 dict의 low_confidence: 최고 유사도가 임계값 미만이면 True — 근거 부족 신호로
     W08 Guardrail(판정 보류)에서 사용한다.
     """
@@ -50,11 +65,15 @@ def search(
     # 색인 구축에 쓴 모델과 다른 모델로 질의를 임베딩하면 유사도가 무의미해진다.
     model = meta.get("embedding_model", EMBEDDING_MODEL)
 
-    vector = np.array(embed_texts([query], model=model), dtype="float32")
+    # 질의는 일회성이라 캐시를 태우지 않는다 — 코퍼스 캐시 파일이 커서 오히려 느려진다.
+    vector = np.array(
+        embed_texts([query], model=model, use_cache=False), dtype="float32"
+    )
     faiss.normalize_L2(vector)
 
-    # 태그 필터가 있으면 전체를 훑은 뒤 걸러낸다(청크 수가 수백 규모라 비용이 무시할 만함).
-    depth = index.ntotal if principle_filter else min(k, index.ntotal)
+    # 걸러낼 조건이 있으면 전체를 훑은 뒤 필터링한다(청크 수가 수백 규모라 비용이 무시할 만함).
+    narrowing = principle_filter or exclude_chunk_ids
+    depth = index.ntotal if narrowing else min(k, index.ntotal)
     scores, ids = index.search(vector, depth)
 
     results: list[dict] = []
@@ -63,6 +82,8 @@ def search(
             continue
         chunk = chunks[idx]
         if principle_filter and chunk["principle"] != principle_filter:
+            continue
+        if exclude_chunk_ids and chunk["chunk_id"] in exclude_chunk_ids:
             continue
         results.append({**chunk, "score": float(score)})
         if len(results) == k:

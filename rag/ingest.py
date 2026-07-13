@@ -227,8 +227,24 @@ def _cache_key(text: str, model: str) -> str:
     return hashlib.sha256(f"{model}\n{text}".encode()).hexdigest()
 
 
-def embed_texts(texts: list[str], model: str = EMBEDDING_MODEL) -> list[list[float]]:
-    """OpenAI 임베딩 + 로컬 캐시. 같은 텍스트는 재실행해도 API를 다시 호출하지 않는다."""
+def embed_texts(
+    texts: list[str], model: str = EMBEDDING_MODEL, use_cache: bool = True
+) -> list[list[float]]:
+    """OpenAI 임베딩. use_cache면 로컬 캐시를 거쳐 같은 텍스트를 재청구하지 않는다.
+
+    use_cache=False는 검색 질의용이다. 캐시는 '색인 재구축 시 코퍼스를 재청구하지 않는다'는
+    목적의 파일이라 코퍼스 전체(수십~수백 MB)를 한 덩어리로 담는다. 일회성 질의를 여기
+    태우면 질의 1건마다 그 파일을 통째로 읽고 다시 쓰게 돼 검색 한 번이 수 초씩 걸린다
+    (실측 8.4초). 질의 임베딩은 값이 싸므로(1건 $0.00003) 그냥 매번 호출하는 편이 낫다.
+    """
+    # API 키는 .env에서만 읽는다 (NFR-06). 경로를 명시해야 실행 위치와 무관하게 찾는다.
+    load_dotenv(ROOT / ".env")
+    client = OpenAI()
+
+    if not use_cache:
+        resp = client.embeddings.create(model=model, input=texts)
+        return [item.embedding for item in resp.data]
+
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     cache: dict[str, list[float]] = {}
     if EMBED_CACHE_PATH.exists():
@@ -237,22 +253,25 @@ def embed_texts(texts: list[str], model: str = EMBEDDING_MODEL) -> list[list[flo
     keys = [_cache_key(t, model) for t in texts]
     todo = [(k, t) for k, t in zip(keys, texts) if k not in cache]
 
-    if todo:
-        # API 키는 .env에서만 읽는다 (NFR-06). 경로를 명시해야 실행 위치와 무관하게 찾는다.
-        load_dotenv(ROOT / ".env")
-        client = OpenAI()
-        for i in range(0, len(todo), EMBEDDING_BATCH):
-            batch = todo[i : i + EMBEDDING_BATCH]
-            print(f"  임베딩 {i + len(batch)}/{len(todo)} ...", flush=True)
-            resp = client.embeddings.create(
-                model=model, input=[t for _, t in batch]
-            )
-            for (key, _), item in zip(batch, resp.data):
-                cache[key] = item.embedding
-            # 중간에 끊겨도 이미 쓴 비용은 보존
-            EMBED_CACHE_PATH.write_text(json.dumps(cache))
+    for i in range(0, len(todo), EMBEDDING_BATCH):
+        batch = todo[i : i + EMBEDDING_BATCH]
+        print(f"  임베딩 {i + len(batch)}/{len(todo)} ...", flush=True)
+        resp = client.embeddings.create(model=model, input=[t for _, t in batch])
+        for (key, _), item in zip(batch, resp.data):
+            cache[key] = item.embedding
+        # 중간에 끊겨도 이미 쓴 비용은 보존
+        _write_cache(cache)
 
     return [cache[k] for k in keys]
+
+
+def _write_cache(cache: dict[str, list[float]]) -> None:
+    """임시 파일에 쓴 뒤 교체(atomic). 직접 write_text하면 쓰는 도중 죽거나 다른
+    프로세스·스레드가 동시에 쓸 때 캐시 파일이 깨진다 — 실제로 판정 엔진의 병렬 검색이
+    이 파일을 반쯤 덮어써 전체 파이프라인이 멈춘 적이 있다. 재빌드 비용도 API 비용이다."""
+    tmp = EMBED_CACHE_PATH.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(cache))
+    tmp.replace(EMBED_CACHE_PATH)
 
 
 # --- 파이프라인 --------------------------------------------------------------
