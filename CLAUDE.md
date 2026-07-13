@@ -45,7 +45,7 @@ regcheck/
 ├── logging_/audit.py       # append-only JSONL audit log (W08)
 ├── scripts/search_demo.py  # W06 DoD verification CLI
 ├── data/
-│   ├── laws/               # law PDFs (user downloads manually; not committed)
+│   ├── laws/               # law PDFs (public domain — committed for reproducibility; re-download from law.go.kr on amendment)
 │   ├── cache/              # embedding cache (gitignored)
 │   ├── index/              # FAISS index + metadata JSON (gitignored)
 │   └── eval/               # labeled eval sets, test queries
