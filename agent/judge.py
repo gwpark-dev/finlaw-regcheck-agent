@@ -519,12 +519,16 @@ def judge(
     prompt_path: Path = PROMPT_PATH,
     cls_override: dict | None = None,
     seed: int | None = SEED,
+    chunks_out: dict | None = None,
 ) -> dict:
     """문구 1건 → 6대 원칙 판정 리포트 (명세서 §7.3 스키마).
 
     parallel=False면 원칙별 호출을 순차 실행한다(디버깅·지연 측정용).
     prompt_path의 버전이 v2로 시작하면 2단 구성요건 판정 구조를 쓴다.
     cls_override: 유형 분류를 주입한다. 분류기 오류가 판정에 미치는 영향을 분리 측정할 때 쓴다.
+    chunks_out: dict를 넘기면 {원칙: 컨텍스트 청크 목록}을 채워준다. W08 인용 검증
+      Guardrail이 "이 원칙에 실제로 제시된 조항"을 검증 기준으로 쓴다(ADR-005).
+      검색을 다시 돌리지 않기 위해 out-param으로 넘긴다.
     """
     load_dotenv(ROOT / ".env")  # NFR-06: 키는 .env에서만
     client = OpenAI()
@@ -538,7 +542,11 @@ def judge(
     # 컨텍스트 구성(= 검색)은 순차로 돌린다. 검색은 질의를 임베딩하며 임베딩 캐시
     # 파일을 갱신하는데, 이를 병렬로 부르면 스레드들이 같은 파일을 동시에 덮어써
     # 캐시가 깨진다(실제로 겪음). 병렬화가 필요한 건 느린 쪽 — LLM 호출뿐이다.
-    contexts = {p: build_context(text, p)[0] for p in PRINCIPLE_ORDER}
+    contexts: dict[str, str] = {}
+    for p in PRINCIPLE_ORDER:
+        contexts[p], chunks = build_context(text, p)
+        if chunks_out is not None:
+            chunks_out[p] = chunks
     usage = _new_usage()
 
     def run(principle: str) -> dict:
