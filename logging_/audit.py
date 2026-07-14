@@ -42,10 +42,16 @@ def log_check(
     chunks_by_principle: dict[str, list[dict]],
     pii_findings: list[dict],
     dropped_citations: list[dict],
+    demoted: list[dict] | None = None,
     session_id: str = "-",
+    cache: dict | None = None,
     path: Path = AUDIT_PATH,
 ) -> dict:
-    """점검 1건을 감사 로그에 append. 반환: 기록된 레코드."""
+    """점검 1건을 감사 로그에 append. 반환: 기록된 레코드.
+
+    cache: {"hit": bool, "forced_recheck": bool} — 저장된 판정을 돌려줬는지, 재판정을
+      명시적으로 요청받았는지. 같은 문구를 다시 판정한 사실 자체가 감사 대상이다(ADR-007).
+    """
     record = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "session_id": session_id,
@@ -69,7 +75,9 @@ def log_check(
         "guardrails": {
             "pii_masked": pii_findings,  # 유형·건수만, 값은 없음
             "dropped_citations": dropped_citations,
+            "demoted_by_duplicate_citation": demoted or [],
         },
+        "cache": cache or {"hit": False, "forced_recheck": False},
         "meta": report["meta"],  # model / prompt_version / seed / system_fingerprint
     }
 

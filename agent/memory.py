@@ -60,6 +60,28 @@ def find_by_hash(input_hash: str) -> list[dict]:
     return [r for r in load_history() if r["input_hash"] == input_hash]
 
 
+# --- 판정 캐시 (FR-09, ADR-007) ----------------------------------------------
+#
+# LLM은 temperature=0 + seed 고정에도 같은 입력을 다르게 판정한다(실측 1.4~3.2% 뒤집힘).
+# 모델의 비결정성은 없앨 수 없으므로, 도구의 출력을 결정적으로 만든다 — 같은 (문구,
+# 프롬프트 버전, 모델)이면 저장된 판정을 그대로 돌려준다. NFR-07의 충족 지점을
+# "모델"에서 "도구"로 옮긴 것이다. 재판정은 명시적 요청으로만 하고 이력에 남는다.
+
+
+def find_cached(input_hash: str, prompt_version: str, model: str) -> dict | None:
+    """같은 입력·프롬프트·모델의 가장 최근 판정. 없으면 None.
+
+    프롬프트나 모델이 바뀌면 키가 달라져 캐시가 자동으로 무효화된다.
+    """
+    for record in reversed(load_history()):
+        if record["input_hash"] != input_hash:
+            continue
+        meta = record["report"]["meta"]
+        if meta.get("prompt_version") == prompt_version and meta.get("model") == model:
+            return record["report"]
+    return None
+
+
 # --- 세션 메모리 --------------------------------------------------------------
 
 
