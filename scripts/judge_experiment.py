@@ -56,10 +56,10 @@ WATCH = {
 }
 
 
-def load_cases() -> list[dict]:
+def load_cases(path: Path = EVAL_PATH) -> list[dict]:
     return [
         json.loads(line)
-        for line in EVAL_PATH.read_text(encoding="utf-8").splitlines()
+        for line in path.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
 
@@ -175,10 +175,10 @@ def flip_rate(runs: list[dict]) -> float | None:
     return flips / total if total else None
 
 
-def report(cases: list[dict]) -> None:
+def report(cases: list[dict], suffix: str = "") -> None:
     results = []
     for key in CONDITIONS:
-        path = OUT_DIR / f"{key}.json"
+        path = OUT_DIR / f"{key}{suffix}.json"
         if path.exists():
             results.append(json.loads(path.read_text(encoding="utf-8")))
     if not results:
@@ -223,6 +223,8 @@ def report(cases: list[dict]) -> None:
     print(f"{'사례':<32}" + "".join(f"{r['key']:>8}" for r in results))
     print("─" * W)
     for (cid, principle), label in WATCH.items():
+        if cid not in by_case:  # 홀드아웃에는 w07 대표 오답 문항이 없다
+            continue
         gold = by_case[cid]["labels"][principle]
         row = f"{cid} {label:<20}"[:32].ljust(32)
         for res in results:
@@ -242,10 +244,18 @@ def main() -> int:
         help="기존 결과에 실행을 1회 덧붙인다(재현성 측정용 — 조건을 통째로 다시 돌리지 않는다)",
     )
     parser.add_argument("--report", action="store_true", help="저장된 결과만 표로 출력")
+    parser.add_argument(
+        "--holdout",
+        action="store_true",
+        help="평가셋 대신 홀드아웃(w08_holdout.jsonl)에 실행. 결과는 <조건>_holdout.json",
+    )
     args = parser.parse_args()
 
-    cases = load_cases()
+    eval_path = (EVAL_DIR / "w08_holdout.jsonl") if args.holdout else EVAL_PATH
+    suffix = "_holdout" if args.holdout else ""
+    cases = load_cases(eval_path)
     OUT_DIR.mkdir(parents=True, exist_ok=True)
+    print(f"평가 대상: {eval_path.name} ({len(cases)}건 / {len(cases) * 6}셀)")
 
     for key in args.conditions:
         if key not in CONDITIONS:
@@ -253,14 +263,14 @@ def main() -> int:
             return 1
         print(f"\n▶ 조건 {key}: {CONDITIONS[key]}")
         res = run_condition(key, cases, args.repeat)
-        path = OUT_DIR / f"{key}.json"
+        path = OUT_DIR / f"{key}{suffix}.json"
         if args.append and path.exists():
             prev = json.loads(path.read_text(encoding="utf-8"))
             res["runs"] = prev["runs"] + res["runs"]
         path.write_text(json.dumps(res, ensure_ascii=False, indent=2), encoding="utf-8")
 
     if args.conditions or args.report:
-        report(cases)
+        report(cases, suffix)
     return 0
 
 
