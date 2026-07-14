@@ -113,6 +113,14 @@ CHECK_STATUS = ("해당", "미해당", "판단불가")
 # 2단(코드)에서 강제로 미해당 처리한다 — 모델이 "보장성 광고 요건 누락"을 펀드 광고에
 # 갖다 붙이는 오답이 실측됐다. 조문의 문언을 코드로 옮긴 것이지 휴리스틱이 아니다.
 #   투자성=펀드 / 보장성=보험 / 대출성=대출 / 예금성=예금
+# v2.1 — 적용 국면을 코드로 강제한다. 모델은 상담 문구에도 광고 규제를 적용 국면으로 보고
+# "설명서 열람 권유 누락"을 찍는 오답을 냈다(실측 7건). 광고 규제(제22조)는 문언상 '광고'에만
+# 적용되므로 유형이 광고가 아니면 국면 밖이다 — labeling_criteria 규칙 2-1과 같은 논리.
+# 여기 없는 원칙의 국면 판단은 v2.0과 동일하게 모델에게 맡긴다(변수 통제).
+PRINCIPLE_INPUT_TYPE_SCOPE = {
+    "광고 규제": {"광고"},
+}
+
 ELEMENT_PRODUCT_SCOPE = {
     "D1": {"대출"},   # 꺾기 — 대출성 상품 계약체결과 관련
     "D4": {"대출"},   # 대출 상환방식 강요
@@ -388,8 +396,12 @@ def judge_principle_v2(
     model: str = JUDGE_MODEL,
     seed: int | None = SEED,
     usage: dict | None = None,
+    phase_gate: bool = False,
 ) -> dict:
-    """v2.0 — 1단(LLM 구성요건 판정) → 2단(코드 verdict 결정)."""
+    """v2.x — 1단(LLM 구성요건 판정) → 2단(코드 verdict 결정).
+
+    phase_gate=True(v2.1)면 적용 국면도 코드가 강제한다.
+    """
     user = render(
         prompts["USER"],
         principle=principle,
@@ -405,7 +417,7 @@ def judge_principle_v2(
         "principle_elements", seed, principle, usage if usage is not None else _new_usage(),
     )
     _validate_v2(data, principle)
-    return _decide(data, principle, cls["product"])
+    return _decide(data, principle, cls["product"], cls["type"], phase_gate)
 
 
 def _validate_v2(data: dict, principle: str) -> None:
@@ -426,7 +438,13 @@ def _out_of_scope(check: dict, product: str) -> bool:
     return bool(scope) and product != "기타" and product not in scope
 
 
-def _decide(data: dict, principle: str, product: str) -> dict:
+def _decide(
+    data: dict,
+    principle: str,
+    product: str,
+    input_type: str = "",
+    phase_gate: bool = False,
+) -> dict:
     """2단 — 1단의 구성요건 판정 결과'만' 보고 verdict를 계산한다.
 
     LLM은 여기에 관여하지 않는다. 원문을 다시 읽지 않으므로 "문구가 나쁘니 이 원칙도
@@ -441,7 +459,15 @@ def _decide(data: dict, principle: str, product: str) -> dict:
     def conf(items: list[dict], default: float) -> float:
         return max((c["confidence"] for c in items), default=default)
 
-    if not data["applicable"]:
+    # v2.1 국면 게이트 — 조문이 국면을 한정한 원칙은 코드가 판단한다.
+    scope = PRINCIPLE_INPUT_TYPE_SCOPE.get(principle)
+    gated_out = phase_gate and scope and input_type and input_type not in scope
+
+    if gated_out:
+        verdict = "OK"
+        confidence = 1.0
+        reason = f"이 원칙의 적용 국면이 아님 — 입력 유형이 '{input_type}'이므로 {principle}(제22조)의 국면이 아니다"
+    elif not data["applicable"]:
         verdict = "OK"
         confidence = 1.0
         reason = f"이 원칙의 적용 국면이 아님 — {data['scope']}"
@@ -503,6 +529,8 @@ def judge(
     prompts = load_prompt(prompt_path)
     version = prompt_version(prompt_path)
     cls = cls_override or classify(text)
+    # v2.1부터 적용 국면도 코드가 강제한다. v2.0은 그대로 둬야 이전 실측치가 재현된다.
+    phase_gate = version >= "v2.1"
     judge_one = judge_principle_v2 if version.startswith("v2") else judge_principle
 
     # 컨텍스트 구성(= 검색)은 순차로 돌린다. 검색은 질의를 임베딩하며 임베딩 캐시
@@ -512,9 +540,10 @@ def judge(
     usage = _new_usage()
 
     def run(principle: str) -> dict:
+        kwargs = {"phase_gate": phase_gate} if version.startswith("v2") else {}
         return judge_one(
             client, text, cls, principle, prompts, contexts[principle],
-            model=model, seed=seed, usage=usage,
+            model=model, seed=seed, usage=usage, **kwargs,
         )
 
     if parallel:

@@ -38,9 +38,14 @@ CONDITIONS = {
     "A": {"model": "gpt-4o-mini", "prompt": "judge_v1.0.md", "oracle": False},
     "B": {"model": "gpt-4o-mini", "prompt": "judge_v1.0.md", "oracle": True},
     "C": {"model": "gpt-4o-mini", "prompt": "judge_v2.0.md", "oracle": True},
-    "D": {"model": "gpt-4.1", "prompt": "judge_v1.0.md", "oracle": True},
-    "E": {"model": "gpt-4.1", "prompt": "judge_v2.0.md", "oracle": True},
+    "F": {"model": "gpt-4o-mini", "prompt": "judge_v2.1.md", "oracle": True},
+    "G": {"model": "gpt-4.1-mini", "prompt": "judge_v2.1.md", "oracle": True},
+    "H": {"model": "gpt-4.1", "prompt": "judge_v2.1.md", "oracle": True},
 }
+
+# 구성요건 오지정 — v2에서 남은 오탐의 핵심 유형. 조문 항목을 잘못 고르고 무관한 문장을
+# 인용해 위반을 만든다. 설명의무·부당권유에서 집중 발생(C 조건 23건).
+MISATTRIB_PRINCIPLES = ("설명의무", "부당권유행위 금지")
 
 # 대표 오답 4건 — 조건별로 고쳐지는지 추적한다.
 WATCH = {
@@ -139,12 +144,22 @@ def score(preds: dict, cases: list[dict]) -> dict:
                 gok += 1
                 fp += pred == "VIOLATION"
             nr += pred == "NEEDS_REVIEW"
+    # 구성요건 오지정: 설명의무·부당권유에서 정상(OK)을 위반으로 찍은 셀 수
+    misattrib = sum(
+        1
+        for case in cases
+        if case["id"] in preds
+        for p in MISATTRIB_PRINCIPLES
+        if case["labels"][p] == "OK" and preds[case["id"]][p] == "VIOLATION"
+    )
     return {
         "accuracy": c / n if n else 0.0,
         "recall": hv / gv if gv else 0.0,
         "fpr": fp / gok if gok else 0.0,
         "needs_review": nr,
         "cells": n,
+        "false_positives": fp,
+        "misattrib": misattrib,
         "per_principle": {p: v["c"] / v["n"] for p, v in per.items()},
     }
 
@@ -175,7 +190,7 @@ def report(cases: list[dict]) -> None:
     print("실험 결과 (평가셋 31건 / 186셀 동결, 확정 라벨)")
     print("═" * W)
     print(f"{'조건':<4}{'모델':<14}{'judge':<7}{'유형':<10}"
-          f"{'정확도':>8}{'오탐률':>8}{'재현율':>8}{'보류':>6}{'스키마':>8}{'초/건':>7}{'비용':>8}{'뒤집힘':>8}")
+          f"{'정확도':>8}{'오탐률':>8}{'재현율':>8}{'오지정':>7}{'초/건':>7}{'비용':>8}{'뒤집힘':>8}")
     print("─" * W)
     for res in results:
         s = score(res["runs"][0]["predicted"], cases)
@@ -185,11 +200,12 @@ def report(cases: list[dict]) -> None:
             f"{res['key']:<4}{res['model']:<14}"
             f"{res['prompt'].replace('judge_', '').replace('.md', ''):<7}"
             f"{'oracle' if res['oracle'] else 'classifier':<10}"
-            f"{s['accuracy']:>8.3f}{s['fpr']:>8.3f}{s['recall']:>8.3f}{s['needs_review']:>6}"
-            f"{run['schema_compliance']:>8.0%}{run['seconds_per_case']:>7.1f}"
+            f"{s['accuracy']:>8.3f}{s['fpr']:>8.3f}{s['recall']:>8.3f}{s['misattrib']:>7}"
+            f"{run['seconds_per_case']:>7.1f}"
             f"{'$' + format(run['cost_usd'], '.2f'):>8}"
             f"{(format(fr, '.1%') if fr is not None else '-'):>8}"
         )
+    print("(오지정 = 설명의무·부당권유에서 정상 문구를 위반으로 찍은 셀 수. C 기준 23건)")
 
     print("\n" + "═" * W)
     print("원칙별 정확도")
@@ -220,6 +236,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="오탐 원인 규명 실험")
     parser.add_argument("conditions", nargs="*", help=f"실행할 조건 {list(CONDITIONS)}")
     parser.add_argument("--repeat", type=int, default=1, help="동일 조건 반복 실행 횟수")
+    parser.add_argument(
+        "--append",
+        action="store_true",
+        help="기존 결과에 실행을 1회 덧붙인다(재현성 측정용 — 조건을 통째로 다시 돌리지 않는다)",
+    )
     parser.add_argument("--report", action="store_true", help="저장된 결과만 표로 출력")
     args = parser.parse_args()
 
@@ -232,9 +253,11 @@ def main() -> int:
             return 1
         print(f"\n▶ 조건 {key}: {CONDITIONS[key]}")
         res = run_condition(key, cases, args.repeat)
-        (OUT_DIR / f"{key}.json").write_text(
-            json.dumps(res, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        path = OUT_DIR / f"{key}.json"
+        if args.append and path.exists():
+            prev = json.loads(path.read_text(encoding="utf-8"))
+            res["runs"] = prev["runs"] + res["runs"]
+        path.write_text(json.dumps(res, ensure_ascii=False, indent=2), encoding="utf-8")
 
     if args.conditions or args.report:
         report(cases)
