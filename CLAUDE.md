@@ -20,25 +20,30 @@ University course project (AI 핀테크 Agent 분석과 설계), 5-week build: W
 |------|-------|--------|
 | W06 | Law PDF chunking/embedding → FAISS RAG | **Done** — recall@5 = 1.00 (10 queries, target 0.80) |
 | W07 | 6-principle verdict engine (Tool) + inspection-history Memory | **Done** — judge v2.1 + gpt-4.1 (ADR-006). 평가셋 31건/186셀: 정확도 **0.903**, 오탐률 **0.096**, 재현율 1.00, 스키마 100%, 8~13초/건. 홀드아웃 12건에서도 목표 유지(0.917 / 0.076) — 과적합 없음 |
-| W08 ★ | Guardrails (PII masking, no-evidence hold, false-positive control) + audit logging | 진행 중 |
+| W08 ★ | Guardrails (PII masking, no-evidence hold, false-positive control) + audit logging | **Done** — DoD 3항목 통과(마스킹 100%, 지식베이스 외 인용 0건, 전 요청 로그). 인용 중복 게이트로 오탐률 0.096→**0.018**(홀드아웃 0.076→**0.000**). 판정 캐시로 NFR-07 충족 |
 | W09 | On-premise architecture design doc | |
 | W10 | Streamlit demo | |
 
-**W07 → W08 인계 항목**
+**W07 → W08 인계 항목 (처리 결과)**
 
-1. **재현성 (NFR-07 미충족)** — gpt-4.1도 동일 입력·seed 고정·temperature=0에서 2회
-   실행 시 186셀 중 6셀(3.2%)이 뒤집힌다(v1.0은 5.6%). 2단을 코드로 옮겨 줄었으나 0은
-   아니다 — 1단이 여전히 LLM이기 때문. 감사 대응 도구로서 "같은 문구를 같게 판정한다"가
-   아직 보장되지 않는다. FR-09 신뢰도 임계값이 이를 흡수할 수 있는지 검토 중.
-2. **classifier–게이트 결합 위험** — v2.1의 국면 게이트(제22조는 광고만)가 `input_type`에
-   의존한다. 실험은 oracle(정답 주입)로 측정했으나 실서비스엔 oracle이 없다. 규칙 기반
-   classifier가 광고/상담을 오분류하면 게이트가 **역작동**한다. classifier 자체의 기여는
-   미미했으므로(+0.021), 개선보다 "유형을 사용자 입력으로 받는" 안을 검토 중.
-3. **부당권유 원칙의 구성요건 오지정** — 6대 원칙 중 가장 약하다(정확도 0.74~0.75).
-   E3(중대사항 미고지)·E8(적합성 회피)를 포괄 조항처럼 끌어다 쓰는 경향이 남아 있다.
+1. ~~재현성 (NFR-07 미충족)~~ → **해소 (ADR-007)**. LLM의 비결정성(1.4~3.2% 뒤집힘)은
+   없앨 수 없으므로 **판정 캐시**로 도구의 출력을 결정적으로 만들었다 — 같은 (입력 해시,
+   프롬프트 버전, 모델)이면 저장된 판정을 반환. NFR-07의 충족 지점을 "모델"에서 "도구"로
+   옮긴 것이다. 재판정은 `force_recheck`로만, 그 사실도 감사 로그에 남는다.
+2. ~~classifier–게이트 결합 위험~~ → **해소 (ADR-008)**. classifier의 광고/상담 정확도가
+   0.535로 "무조건 상담"(0.837)보다 낮고 오분류가 전부 게이트를 여는 방향이었다.
+   **`input_type`을 사용자 필수 입력으로** 바꾸고 classifier는 상품군 분류·기본값 제안으로
+   역할을 축소했다. (W05 하이브리드 분류기 이식 계획은 폐기)
+3. **부당권유 원칙의 구성요건 오지정** — **잔존**. 6대 원칙 중 가장 약하다(0.74~0.75).
+   E3(중대사항 미고지)·E8(적합성 회피)를 포괄 조항처럼 끌어다 쓴다. 인용 중복 게이트가
+   상당수를 잡아내지만(오탐 16→3), 근본 원인은 프롬프트/모델 쪽에 남아 있다.
 
-측정 상세: `data/eval/w08_experiment_results.md`. 평가셋·라벨은 **동결** — FR-09 임계값
-보정에 평가셋을 쓰면 과적합이므로 보정용 데이터는 별도 논의.
+**W08에서 확인된 트레이드오프**: 인용 중복 게이트는 진짜 위반 7건(31건 5 + 홀드아웃 2)도
+NEEDS_REVIEW로 강등한다 — 진짜 위반의 근거가 "여러 원칙이 함께 지목한 그 행위"뿐일 때
+도구가 귀속을 결정하지 못하기 때문이다. **위반이 OK로 분류된 경우는 0건**이므로 전부
+사람 검토로 에스컬레이션되며, 스크리닝 도구로서 안전한 방향의 오류다.
+
+측정 상세: `data/eval/w08_experiment_results.md`. 평가셋·라벨은 **동결**.
 
 ---
 
@@ -96,6 +101,8 @@ Keep dependencies minimal. Adding a new library requires asking the user first.
 - ADR-003: Embeddings switched to `text-embedding-3-large` (spec §7.1 said 3-small; measured recall@5 0.20 → 0.70). Finer chunking and lexical hybrid measured worse — do not retry without new evidence. HyDE deferred.
 - ADR-004: Retrieval eval labels follow the regulatory chain (본법·시행령·감독규정 all count as correct). recall@5 = 1.00 under this rule, 0.70 if 본법-only — the 본법 gap is real and W07 must close it with `principle_filter`.
 - ADR-005: 판정 컨텍스트는 [본법 조항 고정 주입(태그 기반, 검색 없음) + 하위규정 유사도 보강], 원칙당 1회씩 개별 LLM 호출. ADR-002/004의 미결 사항을 정산. 보강 검색 질의에는 원칙명을 붙인다 — 문구만으로 검색하면 6개 원칙이 같은 하위규정을 받아 오탐이 난다.
+- ADR-007: FR-09 재설계 — confidence 임계값 폐기(정답 위반과 오탐의 confidence가 최소값부터 겹쳐 변별력 0), **인용 중복 탐지**로 교체. 다른 원칙과 같은 행위를 근거로 삼고 독립 근거가 없는 VIOLATION은 NEEDS_REVIEW로 강등(법정 중복쌍 {C3,C4}↔{E1,E2}은 예외). 더해 **판정 캐시**로 NFR-07 충족.
+- ADR-008: `input_type`은 **사용자 필수 입력**, classifier는 상품군 분류·기본값 제안으로 강등. 국면 게이트가 유형에 의존하는데 classifier 이진 정확도가 0.535라 게이트가 역작동했다.
 - ADR-006: judge v2.1(2단 구성요건 판정) + 판정 모델 gpt-4.1. 오탐의 지배적 원인은 모델이 아니라 **구조**였다(구조 +0.232 / 모델 +0.080 / classifier +0.021). 단 오탐률 목표(0.15)는 gpt-4.1이 있어야 통과한다. **LLM에게 verdict를 묻지 않는다** — 1단은 구성요건별 충족/불충족 + 문구 인용까지만, 2단(코드)이 verdict를 계산한다. 조문이 결정적으로 한정한 요건(제22조=광고 국면, 제21조제6호=투자성 상품)은 코드 게이트로 강제.
 
 These decisions are settled. Do not change them silently. When a decision worth recording comes up, flag it as "ADR 필요" to the user — but do NOT write ADR bodies yourself. ADRs are drafted in the user's chat session and saved by the user; you may create `docs/decisions/` files only when handed finalized content.

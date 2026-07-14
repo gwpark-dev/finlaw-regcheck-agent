@@ -124,7 +124,8 @@ def check_pipeline(cases: list[dict]) -> bool:
     cited = dropped = 0
 
     for i, case in enumerate(cases, start=1):
-        report = check(case["text"], input_type=case["input_type"])
+        # 캐시가 있으면 저장된 판정을 돌려주므로, DoD는 재판정을 강제해 실제 호출 경로를 본다.
+        report = check(case["text"], input_type=case["input_type"], force_recheck=True)
         rec = audit.load_log()[-1]
         d = len(rec["guardrails"]["dropped_citations"])
         c = sum(len(v["cited"]) for v in rec["verdicts"])
