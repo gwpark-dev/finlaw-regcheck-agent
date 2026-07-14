@@ -399,10 +399,12 @@ def judge_principle_v2(
     seed: int | None = SEED,
     usage: dict | None = None,
     phase_gate: bool = False,
+    elements_out: dict | None = None,
 ) -> dict:
     """v2.x — 1단(LLM 구성요건 판정) → 2단(코드 verdict 결정).
 
     phase_gate=True(v2.1)면 적용 국면도 코드가 강제한다.
+    elements_out: 충족 판정된 구성요건(id·인용 문구)을 받아갈 dict.
     """
     user = render(
         prompts["USER"],
@@ -419,7 +421,14 @@ def judge_principle_v2(
         "principle_elements", seed, principle, usage if usage is not None else _new_usage(),
     )
     _validate_v2(data, principle)
-    return _decide(data, principle, cls["product"], cls["type"], phase_gate)
+    verdict = _decide(data, principle, cls["product"], cls["type"], phase_gate)
+    # 충족 판정된 구성요건과 그 인용 문구는 W08 인용 중복 게이트(ADR-007)가 쓴다.
+    # 리포트 스키마(§7.3)에는 없으므로 out-param으로 빼낸다.
+    if elements_out is not None:
+        elements_out[principle] = verdict.pop("matched_elements", [])
+    else:
+        verdict.pop("matched_elements", None)
+    return verdict
 
 
 def _validate_v2(data: dict, principle: str) -> None:
@@ -505,6 +514,10 @@ def _decide(
         "evidence": evidence,
         "reason": reason,
         "suggestion": data["suggestion"] if verdict == "VIOLATION" else "",
+        # 스키마 밖 — 호출부가 out-param으로 빼가고 리포트에는 남기지 않는다.
+        "matched_elements": [
+            {"id": c["id"], "quote": c["quote"]} for c in matched if c["quote"].strip()
+        ],
     }
 
 
@@ -520,6 +533,7 @@ def judge(
     cls_override: dict | None = None,
     seed: int | None = SEED,
     chunks_out: dict | None = None,
+    elements_out: dict | None = None,
 ) -> dict:
     """문구 1건 → 6대 원칙 판정 리포트 (명세서 §7.3 스키마).
 
@@ -550,7 +564,11 @@ def judge(
     usage = _new_usage()
 
     def run(principle: str) -> dict:
-        kwargs = {"phase_gate": phase_gate} if version.startswith("v2") else {}
+        kwargs = (
+            {"phase_gate": phase_gate, "elements_out": elements_out}
+            if version.startswith("v2")
+            else {}
+        )
         return judge_one(
             client, text, cls, principle, prompts, contexts[principle],
             model=model, seed=seed, usage=usage, **kwargs,

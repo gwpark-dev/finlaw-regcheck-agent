@@ -91,3 +91,96 @@ def verify_report(report: dict, chunks_by_principle: dict[str, list[dict]]) -> t
         dropped_all.extend(dropped)
 
     return {**report, "verdicts": verdicts}, dropped_all
+
+
+# --- 인용 중복 게이트 (FR-09, ADR-007) ---------------------------------------
+#
+# 오탐의 정체는 "한 행위를 이웃 원칙에 돌려쓰기"다. 모델이 문구에서 문제 행위를 하나
+# 찾으면 그 행위를 근거로 여러 원칙을 동시에 위반이라 판정한다. 라벨링 규칙 2
+# ("하나의 행위는 그 행위를 열거한 조문 하나에만 걸린다")를 코드로 옮긴 게이트다.
+#
+# 자기 고유의 근거(다른 원칙이 쓰지 않은 인용)가 하나도 없는 VIOLATION은, 남의 행위를
+# 빌려 온 것으로 보고 NEEDS_REVIEW로 강등한다. OK로 내리지 않는다 — 사람 검토로
+# 올려보내는 것이지 위반 가능성을 지우는 것이 아니다.
+
+# 제19조제3항은 "거짓으로 또는 왜곡(= 불확실한 사항에 단정적 판단을 제공하거나 확실하다고
+# 오인하게 하는 행위)하여 설명"을 금지하고, 제21조는 제1호(단정적 판단)·제2호(사실과
+# 다르게 알림)를 금지한다. 두 조문이 같은 행위 집합을 함께 열거하므로, 이 사이의 인용
+# 공유는 돌려쓰기가 아니라 법이 예정한 중복이다 (labeling_criteria 규칙 2-1).
+LEGAL_OVERLAP = {
+    "설명의무": {"C3", "C4"},
+    "부당권유행위 금지": {"E1", "E2"},
+}
+
+_QUOTE_NOISE = re.compile(r"[\s.,·…\"'”“]+")
+
+
+def _norm_quote(q: str) -> str:
+    return _QUOTE_NOISE.sub("", q or "")
+
+
+def _same_act(a: str, b: str) -> bool:
+    """같은 행위를 가리키는 인용인가. 모델이 같은 문장을 길고 짧게 인용하므로 포함 관계로 본다."""
+    a, b = _norm_quote(a), _norm_quote(b)
+    return bool(a) and bool(b) and (a in b or b in a)
+
+
+def _is_legal_overlap(p1: str, e1: str, p2: str, e2: str) -> bool:
+    return (
+        {p1, p2} == set(LEGAL_OVERLAP)
+        and e1 in LEGAL_OVERLAP.get(p1, set())
+        and e2 in LEGAL_OVERLAP.get(p2, set())
+    )
+
+
+def duplicate_citation_gate(
+    report: dict, elements_by_principle: dict[str, list[dict]]
+) -> tuple[dict, list[dict]]:
+    """인용 중복 게이트. 반환: (게이트 적용 리포트, 강등 내역)"""
+    violating = [v["principle"] for v in report["verdicts"] if v["verdict"] == "VIOLATION"]
+
+    def has_own_evidence(principle: str) -> bool:
+        mine = elements_by_principle.get(principle) or []
+        for el in mine:
+            shared = any(
+                _same_act(el["quote"], other["quote"])
+                and not _is_legal_overlap(principle, el["id"], p2, other["id"])
+                for p2 in violating
+                if p2 != principle
+                for other in elements_by_principle.get(p2, [])
+            )
+            if not shared:
+                return True  # 이 원칙만의 근거가 있다
+        return False
+
+    verdicts, demoted = [], []
+    for verdict in report["verdicts"]:
+        principle = verdict["principle"]
+        elements = elements_by_principle.get(principle) or []
+        # 인용을 남긴 VIOLATION만 대상 (누락형 위반은 인용이 비어 있어 중복 판단 불가)
+        if verdict["verdict"] != "VIOLATION" or not elements or has_own_evidence(principle):
+            verdicts.append(verdict)
+            continue
+
+        borrowed = ", ".join(f'"{e["quote"][:30]}…"' for e in elements)
+        verdicts.append(
+            {
+                **verdict,
+                "verdict": "NEEDS_REVIEW",
+                "suggestion": "",
+                "reason": (
+                    f"[Guardrail: 다른 원칙과 같은 행위를 근거로 삼음 → 판정 보류] "
+                    f"이 원칙만의 독립적 근거가 없다(인용: {borrowed}). "
+                    f"(원 판정: VIOLATION / {verdict['reason']})"
+                ),
+            }
+        )
+        demoted.append(
+            {
+                "principle": principle,
+                "reason": "인용 중복 — 독립 근거 없음",
+                "elements": [e["id"] for e in elements],
+            }
+        )
+
+    return {**report, "verdicts": verdicts}, demoted
