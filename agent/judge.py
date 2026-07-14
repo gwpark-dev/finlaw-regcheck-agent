@@ -24,8 +24,10 @@ from agent.classifier import classify
 from rag.config import EMBEDDING_MODEL, PRINCIPLES, ROOT
 from rag.retriever import chunks_by_principle, search
 
-JUDGE_MODEL = "gpt-4o-mini"
-PROMPT_PATH = ROOT / "agent" / "prompts" / "judge_v1.0.md"
+# ADR-006 채택안. gpt-4o-mini는 v2.1 구조 위에서도 오탐률 0.187(홀드아웃 0.152)로
+# 목표(0.15) 미달이고 명시 문장을 누락으로 읽는 독해 실패가 남았다. gpt-4.1은 0.096/0.076.
+JUDGE_MODEL = "gpt-4.1"
+PROMPT_PATH = ROOT / "agent" / "prompts" / "judge_v2.1.md"
 
 # temperature=0으로도 판정이 재현되지 않았다(동일 30문항 재실행 시 180셀 중 10셀 뒤집힘).
 # seed를 고정하고 응답의 system_fingerprint를 meta에 남겨, 결과가 달라졌을 때

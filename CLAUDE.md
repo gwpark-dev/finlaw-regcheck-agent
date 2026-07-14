@@ -19,37 +19,26 @@ University course project (AI 핀테크 Agent 분석과 설계), 5-week build: W
 | Week | Scope | Status |
 |------|-------|--------|
 | W06 | Law PDF chunking/embedding → FAISS RAG | **Done** — recall@5 = 1.00 (10 queries, target 0.80) |
-| W07 | 6-principle verdict engine (Tool) + inspection-history Memory | **Done (일부 목표 미달)** — 평가셋 31건/186셀, 확정 라벨 기준: 스키마 준수 **100%**, 1건 **8.2초**(NFR-01 30초), 판정 정확도 **0.565**(목표 0.75 미달), 오탐률 **0.482**(목표 0.15 미달), 위반 재현율 0.95. **오탐 과다**가 미해결 (아래) |
-| W08 ★ | Guardrails (PII masking, no-evidence hold, false-positive control) + audit logging | |
+| W07 | 6-principle verdict engine (Tool) + inspection-history Memory | **Done** — judge v2.1 + gpt-4.1 (ADR-006). 평가셋 31건/186셀: 정확도 **0.903**, 오탐률 **0.096**, 재현율 1.00, 스키마 100%, 8~13초/건. 홀드아웃 12건에서도 목표 유지(0.917 / 0.076) — 과적합 없음 |
+| W08 ★ | Guardrails (PII masking, no-evidence hold, false-positive control) + audit logging | 진행 중 |
 | W09 | On-premise architecture design doc | |
 | W10 | Streamlit demo | |
 
-**W07 미해결 이슈 — 판정 오탐 (W08 최우선)**
+**W07 → W08 인계 항목**
 
-gpt-4o-mini가 문구에 문제가 하나라도 보이면 6대 원칙에 폭넓게 VIOLATION을 찍는다.
-정상 라벨 166셀 중 80셀(48%)을 위반으로 판정했다. 재현율 0.95는 "거의 다 위반으로
-찍은" 결과라 좋은 신호가 아니다. 프롬프트로 억제를 시도했으나(적용 국면 게이트, 조문
-열거 행위 매칭 강제, 원칙별 few-shot) 한계가 있었다 — `agent/prompts/judge_v1.0.md`.
+1. **재현성 (NFR-07 미충족)** — gpt-4.1도 동일 입력·seed 고정·temperature=0에서 2회
+   실행 시 186셀 중 6셀(3.2%)이 뒤집힌다(v1.0은 5.6%). 2단을 코드로 옮겨 줄었으나 0은
+   아니다 — 1단이 여전히 LLM이기 때문. 감사 대응 도구로서 "같은 문구를 같게 판정한다"가
+   아직 보장되지 않는다. FR-09 신뢰도 임계값이 이를 흡수할 수 있는지 검토 중.
+2. **classifier–게이트 결합 위험** — v2.1의 국면 게이트(제22조는 광고만)가 `input_type`에
+   의존한다. 실험은 oracle(정답 주입)로 측정했으나 실서비스엔 oracle이 없다. 규칙 기반
+   classifier가 광고/상담을 오분류하면 게이트가 **역작동**한다. classifier 자체의 기여는
+   미미했으므로(+0.021), 개선보다 "유형을 사용자 입력으로 받는" 안을 검토 중.
+3. **부당권유 원칙의 구성요건 오지정** — 6대 원칙 중 가장 약하다(정확도 0.74~0.75).
+   E3(중대사항 미고지)·E8(적합성 회피)를 포괄 조항처럼 끌어다 쓰는 경향이 남아 있다.
 
-세 가지가 원인이 **아님**을 실측으로 배제했다:
-- **라벨 주관성 아님** — 라벨 확정(제19조③ 국면 조건부 복수 라벨 등) 전후로 정확도
-  0.578 → 0.578, 오탐률 0.469 → 0.469. 라벨을 고쳐도 수치가 움직이지 않는다.
-- **근거 검색 실패 아님** — 인용 조항은 대체로 정확하고, evidence 미인용에 의한
-  NEEDS_REVIEW 강등은 0건이었다.
-- **스키마/파싱 문제 아님** — 준수율 100%.
-
-남은 원인은 모델의 판단 자체다. 특히 심각한 것은 판단이 아니라 **독해 실패**다 —
-w07-029/030은 "계약 체결 전 설명서·약관을 읽어보시기 바랍니다"를 문구에 그대로 담고
-있는데도 모델은 그 항목이 "누락"이라 판정했다. 정상 문구의 **위험 고지 문장을 위반
-근거로 삼는** 패턴도 있다(w07-015의 해지환급금 원금 미달 고지 → "단정적 판단" 판정).
-컴플라이언스를 잘 지킨 문구일수록 더 걸리는 구조라 실무 도구로는 치명적이다
-(명세서 §13 "오탐 과다 → 도구 불신").
-
-또한 **temperature=0에서도 판정이 재현되지 않는다** — 동일 30문항 재실행 시 180셀 중
-10셀(5.6%)이 뒤집혔다. NFR-07(재현성) 관점에서 별도 검토가 필요하다.
-
-W08 후보: FR-09(신뢰도 임계값 보류), 모델 상향(명세서 §12 변경 → ADR 필요),
-판정 근거를 조문 구성요건 체크리스트로 분해하는 2단 판정.
+측정 상세: `data/eval/w08_experiment_results.md`. 평가셋·라벨은 **동결** — FR-09 임계값
+보정에 평가셋을 쓰면 과적합이므로 보정용 데이터는 별도 논의.
 
 ---
 
@@ -91,7 +80,8 @@ regcheck/
 |-------|--------|
 | Python | 3.11+ (managed by uv) |
 | Package manager | uv (single project, pyproject.toml — no requirements.txt) |
-| LLM | OpenAI `gpt-4o-mini` (verdicts, W07+) |
+| LLM | OpenAI `gpt-4.1` (verdicts — ADR-006; gpt-4o-mini는 오탐률 목표 미달) |
+| Judge prompt | `agent/prompts/judge_v2.1.md` (2단 구성요건 판정; v1.0/v2.0은 실험 기록용 동결) |
 | Embeddings | OpenAI `text-embedding-3-large`, locally cached (ADR-003 — 3-small measured recall@5 0.20) |
 | Vector store | FAISS (faiss-cpu) + metadata JSON |
 | PDF parsing | pdfplumber |
@@ -105,6 +95,8 @@ Keep dependencies minimal. Adding a new library requires asking the user first.
 - ADR-002: 6-principle tags limited to 금소법 본법 제17~22조 (시행령/감독규정 untagged; W07 must revisit — "본법 태그 필터 + 시행령 보강 검색" 설계)
 - ADR-003: Embeddings switched to `text-embedding-3-large` (spec §7.1 said 3-small; measured recall@5 0.20 → 0.70). Finer chunking and lexical hybrid measured worse — do not retry without new evidence. HyDE deferred.
 - ADR-004: Retrieval eval labels follow the regulatory chain (본법·시행령·감독규정 all count as correct). recall@5 = 1.00 under this rule, 0.70 if 본법-only — the 본법 gap is real and W07 must close it with `principle_filter`.
+- ADR-005: 판정 컨텍스트는 [본법 조항 고정 주입(태그 기반, 검색 없음) + 하위규정 유사도 보강], 원칙당 1회씩 개별 LLM 호출. ADR-002/004의 미결 사항을 정산. 보강 검색 질의에는 원칙명을 붙인다 — 문구만으로 검색하면 6개 원칙이 같은 하위규정을 받아 오탐이 난다.
+- ADR-006: judge v2.1(2단 구성요건 판정) + 판정 모델 gpt-4.1. 오탐의 지배적 원인은 모델이 아니라 **구조**였다(구조 +0.232 / 모델 +0.080 / classifier +0.021). 단 오탐률 목표(0.15)는 gpt-4.1이 있어야 통과한다. **LLM에게 verdict를 묻지 않는다** — 1단은 구성요건별 충족/불충족 + 문구 인용까지만, 2단(코드)이 verdict를 계산한다. 조문이 결정적으로 한정한 요건(제22조=광고 국면, 제21조제6호=투자성 상품)은 코드 게이트로 강제.
 
 These decisions are settled. Do not change them silently. When a decision worth recording comes up, flag it as "ADR 필요" to the user — but do NOT write ADR bodies yourself. ADRs are drafted in the user's chat session and saved by the user; you may create `docs/decisions/` files only when handed finalized content.
 
