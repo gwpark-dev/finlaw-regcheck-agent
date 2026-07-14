@@ -43,7 +43,16 @@ PATTERNS: list[tuple[str, re.Pattern]] = [
     ("계좌번호", re.compile(rf"{NOT_DIGIT_BEFORE}\d{{2,6}}\s*-\s*\d{{2,6}}\s*-\s*\d{{2,8}}{NOT_DIGIT_AFTER}")),
 ]
 
+# 계좌번호 패턴은 "2026-07-14" 같은 날짜도 삼킨다(4-2-2 = 8자리). 실제 계좌번호는
+# 10자리 이상이므로 숫자 총합으로 가른다 — 날짜를 [계좌번호]로 바꿔버리면 원문이 훼손되고
+# 법령 시행일·금리 기준일 같은 판정에 필요한 정보가 사라진다.
+MIN_ACCOUNT_DIGITS = 9
+
 TOKEN = "[{kind}]"
+
+
+def _digits(s: str) -> int:
+    return sum(c.isdigit() for c in s)
 
 
 def mask(text: str) -> tuple[str, list[dict]]:
@@ -55,9 +64,13 @@ def mask(text: str) -> tuple[str, list[dict]]:
     masked = text
 
     for kind, pattern in PATTERNS:
-        masked, n = pattern.subn(TOKEN.format(kind=kind), masked)
-        if n:
-            counts[kind] = counts.get(kind, 0) + n
+        def repl(m: re.Match, kind: str = kind) -> str:
+            if kind == "계좌번호" and _digits(m.group()) < MIN_ACCOUNT_DIGITS:
+                return m.group()  # 날짜 등 — 계좌번호가 아니다
+            counts[kind] = counts.get(kind, 0) + 1
+            return TOKEN.format(kind=kind)
+
+        masked = pattern.sub(repl, masked)
 
     findings = [{"type": k, "count": v} for k, v in counts.items()]
     return masked, findings
@@ -65,4 +78,4 @@ def mask(text: str) -> tuple[str, list[dict]]:
 
 def has_pii(text: str) -> bool:
     """마스킹이 필요한 값이 남아 있는지. 파이프라인 사후 점검용."""
-    return any(p.search(text) for _, p in PATTERNS)
+    return bool(mask(text)[1])
