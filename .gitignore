@@ -16,6 +16,9 @@ wheels/
 data/index/
 data/cache/
 
+# W09 PoC 로컬 인덱스(bge-m3) — w09_poc_embed.py 재실행으로 복원 가능
+data/index_poc/
+
 # 점검 이력 — 런타임 산출물 (감사 로그는 W08에서 별도 설계)
 data/history/
 

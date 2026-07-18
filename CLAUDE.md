@@ -21,7 +21,7 @@ University course project (AI 핀테크 Agent 분석과 설계), 5-week build: W
 | W06 | Law PDF chunking/embedding → FAISS RAG | **Done** — recall@5 = 1.00 (10 queries, target 0.80) |
 | W07 | 6-principle verdict engine (Tool) + inspection-history Memory | **Done** — judge v2.1 + gpt-4.1 (ADR-006). 평가셋 31건/186셀: 정확도 **0.903**, 오탐률 **0.096**, 재현율 1.00, 스키마 100%, 8~13초/건. 홀드아웃 12건에서도 목표 유지(0.917 / 0.076) — 과적합 없음 |
 | W08 ★ | Guardrails (PII masking, no-evidence hold, false-positive control) + audit logging | **Done** — DoD 3항목 통과(마스킹 100%, 지식베이스 외 인용 0건, 전 요청 로그). 인용 중복 게이트로 오탐률 0.096→**0.018**(홀드아웃 0.076→**0.000**). 판정 캐시로 NFR-07 충족 |
-| W09 | On-premise architecture design doc | |
+| W09 | On-premise architecture design doc | **Done** — 설계 문서(3티어·경계·로그 정책) + 전환 PoC 실측(ADR-009). 임베딩 로컬 대체 가능(bge-m3 recall@5 **0.90**), 판정 LLM은 **CPU 서빙 불가**(qwen2.5:7b가 judge_v2.1 출력 폭주 → OOM) → **Tier 2는 GPU 전제** |
 | W10 | Streamlit demo | |
 
 **W07 → W08 인계 항목 (처리 결과)**
@@ -129,6 +129,7 @@ Keep dependencies minimal. Adding a new library requires asking the user first.
 - ADR-005: 판정 컨텍스트는 [본법 조항 고정 주입(태그 기반, 검색 없음) + 하위규정 유사도 보강], 원칙당 1회씩 개별 LLM 호출. ADR-002/004의 미결 사항을 정산. 보강 검색 질의에는 원칙명을 붙인다 — 문구만으로 검색하면 6개 원칙이 같은 하위규정을 받아 오탐이 난다.
 - ADR-007: FR-09 재설계 — confidence 임계값 폐기(정답 위반과 오탐의 confidence가 최소값부터 겹쳐 변별력 0), **인용 중복 탐지**로 교체. 다른 원칙과 같은 행위를 근거로 삼고 독립 근거가 없는 VIOLATION은 NEEDS_REVIEW로 강등(법정 중복쌍 {C3,C4}↔{E1,E2}은 예외). 더해 **판정 캐시**로 NFR-07 충족.
 - ADR-008: `input_type`은 **사용자 필수 입력**, classifier는 상품군 분류·기본값 제안으로 강등. 국면 게이트가 유형에 의존하는데 classifier 이진 정확도가 0.535라 게이트가 역작동했다.
+- ADR-009: 로컬 전환 PoC — 임베딩(bge-m3)은 로컬 대체 가능(recall@5 0.90), 판정 LLM의 CPU 서빙은 불가(judge_v2.1 출력 폭주 → KV 메모리 잠식 → OOM). Tier 2의 실질 전제는 GPU. 부정적 결과도 실측으로 기록한다. 측정: `data/eval/w09_poc_results.md`.
 - ADR-006: judge v2.1(2단 구성요건 판정) + 판정 모델 gpt-4.1. 오탐의 지배적 원인은 모델이 아니라 **구조**였다(구조 +0.232 / 모델 +0.080 / classifier +0.021). 단 오탐률 목표(0.15)는 gpt-4.1이 있어야 통과한다. **LLM에게 verdict를 묻지 않는다** — 1단은 구성요건별 충족/불충족 + 문구 인용까지만, 2단(코드)이 verdict를 계산한다. 조문이 결정적으로 한정한 요건(제22조=광고 국면, 제21조제6호=투자성 상품)은 코드 게이트로 강제.
 
 These decisions are settled. Do not change them silently. When a decision worth recording comes up, flag it as "ADR 필요" to the user — but do NOT write ADR bodies yourself. ADRs are drafted in the user's chat session and saved by the user; you may create `docs/decisions/` files only when handed finalized content.
