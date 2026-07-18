@@ -10,6 +10,8 @@
 
 from __future__ import annotations
 
+import html
+import json
 import re
 import time
 
@@ -20,6 +22,7 @@ from agent.judge import JUDGE_MODEL, PROMPT_PATH, input_hash, prompt_version
 from agent.memory import Session, summarize
 from agent.pipeline import INPUT_TYPES, PipelineError, check, suggest_input_type
 from guardrails.masking import mask
+from rag.config import META_PATH, PRINCIPLES
 
 VERDICT_STYLE = {
     "VIOLATION": ("🔴", "#c0392b", "위반 소지"),
@@ -91,6 +94,145 @@ def run_check(text: str, input_type: str, force: bool) -> None:
     st.session_state.meta_ui = {"elapsed": elapsed, "cache_hit": cache_hit, "forced": force}
 
 
+# --- 근거 조항: 지식베이스 원문 직접 조회 + 위반한 호 강조 -----------------------
+# 화면의 조문은 항상 지식베이스 원본이어야 한다(NFR-02 취지). LLM이 재인용한 quote는
+# 쓰지 않는다. 충족된 구성요건은 조문의 특정 호에 대응하므로(judge 체크리스트 매핑) 그
+# 호를 강조하고 나머지는 접는다. 파이프라인·judge는 무수정 — 조회·렌더링만 한다.
+
+PRINCIPLE_ARTICLE = {name: f"제{num}조" for num, name in PRINCIPLES.items()}
+
+# 구성요건 코드 → (항 기호, 호 번호). 호 열거형 조문만. 단일 항 조는 항="".
+# 목(가/나) 단위 코드는 그 호를 강조한다(호의 원문 전체 = 목 포함).
+ELEMENT_CLAUSE = {
+    "불공정영업행위 금지": {  # 제20조 (단일 항)
+        "D1": ("", "1"), "D2": ("", "2"), "D3": ("", "3"),
+        "D4": ("", "4"), "D5": ("", "4"), "D6": ("", "4"), "D7": ("", "5"),
+    },
+    "부당권유행위 금지": {  # 제21조 (단일 항)
+        "E1": ("", "1"), "E2": ("", "2"), "E3": ("", "3"), "E4": ("", "4"),
+        "E5": ("", "5"), "E6": ("", "6"), "E7": ("", "6"), "E8": ("", "7"),
+    },
+    "광고 규제": {  # 제22조 (항별)
+        "F1": ("③", "1"), "F2": ("③", "2"), "F3": ("③", "3"), "F4": ("③", "3"),
+        "F5": ("③", "3"), "F6": ("③", "3"), "F7": ("②", ""),
+        "F8": ("④", "2"), "F9": ("④", "1"), "F10": ("④", "4"), "F11": ("④", "3"),
+    },
+}
+
+
+@st.cache_data
+def _kb_chunks() -> list[dict]:
+    """지식베이스 인덱스 메타데이터의 조문 청크 (읽기 전용, API 호출 없음)."""
+    return json.loads(META_PATH.read_text(encoding="utf-8"))["chunks"]
+
+
+def _norm(s: str) -> str:
+    return re.sub(r"\s", "", s or "")
+
+
+def _kb_article(law: str, article: str) -> list[dict]:
+    """(법령명, 조) → 그 조의 KB 청크들(항 순서). 공백 무시 대조."""
+    nl, na = _norm(law), _norm(article)
+    return [c for c in _kb_chunks() if _norm(c["law"]) == nl and _norm(c["article"]) == na]
+
+
+def _split_ho(text: str) -> tuple[str, list[tuple[str, str]]]:
+    """조문/항 텍스트 → (두문, [(호번호, 호원문)]). 호는 줄머리 'N. '로 구분."""
+    parts = re.split(r"\n(?=\d+\.\s)", text.strip())
+    hos = []
+    for p in parts[1:]:
+        m = re.match(r"(\d+)\.\s", p)
+        if m:
+            hos.append((m.group(1), p.strip()))
+    return parts[0].strip(), hos
+
+
+def _strip_title(head: str) -> str:
+    """두문 앞의 '제N조(제목)'을 제거(헤더에 별도 표시하므로)."""
+    return re.sub(r"^제\d+조(?:의\d+)?\([^)]*\)\s*", "", head).strip()
+
+
+def matched_codes(v: dict) -> set[str]:
+    """VIOLATION 사유에서 충족된 구성요건 코드. 상품군 제외분·비위반은 뺀다."""
+    if v["verdict"] != "VIOLATION":
+        return set()
+    reason = _DROPPED_RE.sub("", v["reason"])  # "(상품군 불일치로 제외…)" 제거
+    if not reason.startswith("구성요건 충족: "):
+        return set()
+    return set(re.findall(r"\[(\w+)\]", reason))
+
+
+# 조문 표시용 줄바꿈 포매터(렌더링 전용 — 인덱스 원문은 무수정).
+# 목 마커: 앞이 한글/숫자가 아닌 단독 '가.'~'하.'. 문장 끝 '…다.'는 앞이 한글이라 제외.
+_MOK_RE = re.compile(r"\s*(?<![가-힣0-9])([가나다라마바사아자차카타파하]\.)\s+")
+# 세목 마커: '(' 뒤가 아니고 **뒤에 공백이 오는** 'N)'. 참조 '1)부터'는 공백이 없어 제외된다.
+_SEMOK_RE = re.compile(r"(?<!\()(\d+\))(?=\s)")
+
+
+def format_clause(text: str) -> str:
+    """목(가/나/다) -> 줄바꿈+1단 들여쓰기, 세목(1) 2) 3)) -> 줄바꿈+2단 들여쓰기.
+    마커는 보수적으로만 인식하고 애매하면 원문을 유지한다(오검출 방지)."""
+    t = html.escape(re.sub(r"\s+", " ", text.strip()))
+    t = _SEMOK_RE.sub(r"@@SUB@@\1", t)   # 세목(2단) 자리표시
+    t = _MOK_RE.sub(r"@@MOK@@\1 ", t)    # 목(1단) 자리표시
+    return (t.replace("@@SUB@@", "<br>&emsp;&emsp;")
+             .replace("@@MOK@@", "<br>&emsp;").strip())
+
+
+def _clause(text: str, highlight: bool = False) -> None:
+    body = format_clause(text)
+    style = "border-left:3px solid #c0392b;padding-left:8px;font-weight:600;" if highlight else ""
+    st.markdown(f"<div style='margin:.3em 0;{style}'>{body}</div>", unsafe_allow_html=True)
+
+
+def render_article(law: str, article: str, highlight: set) -> None:
+    """조문을 KB 원문으로 렌더. highlight={(항,호)}면 그 호만 강조·나머지는 접는다."""
+    chunks = _kb_article(law, article)
+    st.markdown(f"**{law} {article}**"
+                + (f" ({chunks[0]['article_title']})" if chunks and chunks[0].get("article_title") else ""))
+    if not chunks:
+        st.caption("(지식베이스에서 원문을 찾지 못함)")
+        return
+    for c in chunks:
+        para = c.get("paragraph") or ""
+        head, hos = _split_ho(c["text"])
+        hi = [(n, t) for n, t in hos if (para, n) in highlight]
+        para_hi = (para, "") in highlight  # 호 없는 항 두문 강조(예: F7 제2항)
+        if highlight and not hi and not para_hi:
+            continue  # 이 항엔 위반한 호가 없음 → 생략
+        head_disp = _strip_title(head)
+        if head_disp:
+            _clause(head_disp, highlight=para_hi)
+        for _, t in hi:
+            _clause(t, highlight=True)  # 위반한 호 강조
+        rest = [(n, t) for n, t in hos if (n, t) not in hi]
+        if highlight and rest:
+            with st.expander(f"이 {'항' if para else '조'}의 다른 호 {len(rest)}개"):
+                for _, t in rest:
+                    _clause(t)
+        elif not highlight:  # 강조 대상 없음(정상·보류 등) → 전체 호 표시
+            for _, t in hos:
+                _clause(t)
+
+
+def render_evidence(v: dict) -> None:
+    """근거 조항을 조 단위로 묶어 KB 원문으로 표시. VIOLATION은 위반한 호 강조."""
+    if not v["evidence"]:
+        st.caption("근거 조항 인용 없음")
+        return
+    articles = {}  # 같은 조가 여러 evidence로 오면 하나로 묶는다
+    for e in v["evidence"]:
+        articles.setdefault((_norm(e["law"]), _norm(e["article"])), e)
+    codes = matched_codes(v)
+    clause = ELEMENT_CLAUSE.get(v["principle"], {})
+    main = _norm(PRINCIPLE_ARTICLE.get(v["principle"], ""))
+    # inline 렌더 — expander로 감싸지 않는다(render_article의 '다른 호' expander와 중첩 방지).
+    st.markdown(f"**근거 조항** {len(articles)}건")
+    for (nl, na), e in articles.items():
+        hl = {clause[c] for c in codes if c in clause} if na == main else set()
+        render_article(e["law"], e["article"], hl)
+
+
 def render_reason(reason: str) -> None:
     """사유를 읽기 쉬운 불릿으로 렌더. 구성요건 코드([F1] 등)는 화면 어디에도 남기지
     않는다 — 감사용 원본은 감사 로그(JSONL)에 전부 있고, UI는 사람이 읽는 표현만 맡는다."""
@@ -118,13 +260,7 @@ def render_verdict_card(v: dict) -> None:
         )
         render_reason(v["reason"])
 
-        if v["evidence"]:
-            with st.expander(f"근거 조항 {len(v['evidence'])}건", expanded=v["verdict"] == "VIOLATION"):
-                for e in v["evidence"]:
-                    st.markdown(f"**{e['law']} {e['article']}**")
-                    st.caption(f"“{e['quote']}”")
-        else:
-            st.caption("근거 조항 인용 없음")
+        render_evidence(v)
 
         if v["verdict"] == "NEEDS_REVIEW":
             st.info("👤 **사람 검토 필요** — 도구가 확정하지 못한 건입니다. 준법감시 담당자가 최종 판단합니다.", icon="ℹ️")
@@ -159,13 +295,6 @@ def render_report() -> None:
         st.markdown(f"**판정 모델:** `{report['meta']['model']}` — 위반 여부를 판단한 AI 모델")
         st.markdown(f"**판정 기준 버전:** `{report['meta']['prompt_version']}` — 같은 버전에서는 같은 문구에 같은 결과 보장")
         st.markdown(f"**문구 식별번호:** `{report['input_hash'][:12]}…` — 감사 기록에서 이 점검을 찾을 때 쓰는 번호")
-        flagged = groups["VIOLATION"] + groups["NEEDS_REVIEW"]
-        if flagged:
-            st.markdown("---")
-            st.markdown("**원칙별 판정 상세**")
-            for v in flagged:
-                st.markdown(f"**{VERDICT_STYLE[v['verdict']][0]} {v['principle']}**")
-                render_reason(v["reason"])
         st.caption("감사 기록 원본은 로그 파일 참조")
 
     st.divider()
@@ -221,7 +350,7 @@ with tab_check:
     if st.button("🔍 검사", type="primary", disabled=not text.strip()):
         st.session_state.last_text, st.session_state.last_type = text, input_type
         try:
-            with st.spinner("점검 중… (마스킹 → 원칙별 판정 6회 → 인용 검증 → 중복 게이트)"):
+            with st.spinner("점검 중…"):
                 run_check(text, input_type, force=False)
         except PipelineError as e:
             st.error(f"파이프라인 오류: {e}")
