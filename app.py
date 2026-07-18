@@ -91,6 +91,21 @@ def run_check(text: str, input_type: str, force: bool) -> None:
     st.session_state.meta_ui = {"elapsed": elapsed, "cache_hit": cache_hit, "forced": force}
 
 
+def render_reason(reason: str) -> None:
+    """사유를 읽기 쉬운 불릿으로 렌더. 구성요건 코드([F1] 등)는 화면 어디에도 남기지
+    않는다 — 감사용 원본은 감사 로그(JSONL)에 전부 있고, UI는 사람이 읽는 표현만 맡는다."""
+    items, _ = parse_elements(reason)
+    if not items:
+        st.write(reason)  # 구조화 포맷이 아닌 사유(게이트 강등 등)는 원문 그대로
+        return
+    for it in items:
+        st.markdown(f"- {it['finding']}")
+        if it["quote"]:
+            st.markdown(f"> {it['quote']}")  # 인용문은 인용 블록으로 구분
+        elif it["quote"] == "":
+            st.caption("↳ 문구에 해당 내용 없음")  # 누락형 위반
+
+
 def render_verdict_card(v: dict) -> None:
     emoji, color, label = VERDICT_STYLE.get(v["verdict"], ("⚪", "#7f8c8d", v["verdict"]))
     with st.container(border=True):
@@ -101,16 +116,7 @@ def render_verdict_card(v: dict) -> None:
             f"</div>",
             unsafe_allow_html=True,
         )
-        items, _dropped = parse_elements(v["reason"])
-        if items:
-            for it in items:
-                st.markdown(f"- {it['finding']}")
-                if it["quote"]:
-                    st.markdown(f"> {it['quote']}")  # 인용문은 인용 블록으로 구분
-                elif it["quote"] == "":
-                    st.caption("↳ 문구에 해당 내용 없음")  # 누락형 위반
-        else:
-            st.write(v["reason"])  # 구조화 포맷이 아닌 사유는 원문 그대로
+        render_reason(v["reason"])
 
         if v["evidence"]:
             with st.expander(f"근거 조항 {len(v['evidence'])}건", expanded=v["verdict"] == "VIOLATION"):
@@ -148,17 +154,19 @@ def render_report() -> None:
 
     st.caption(f"유형: **{report['input_type']}** · 상품군: **{report['product_category']}**")
 
-    # 기술 정보·구성요건 코드는 감사 대응 때만 필요 — 검수 화면에서는 접어둔다 (NFR-07)
-    with st.expander("판정 정보 (감사 대응용)"):
+    # 기술 정보는 검수 화면에서 접어둔다 — 사람이 읽는 요약만 (NFR-07)
+    with st.expander("판정 정보"):
         st.markdown(f"**판정 모델:** `{report['meta']['model']}` — 위반 여부를 판단한 AI 모델")
         st.markdown(f"**판정 기준 버전:** `{report['meta']['prompt_version']}` — 같은 버전에서는 같은 문구에 같은 결과 보장")
         st.markdown(f"**문구 식별번호:** `{report['input_hash'][:12]}…` — 감사 기록에서 이 점검을 찾을 때 쓰는 번호")
         flagged = groups["VIOLATION"] + groups["NEEDS_REVIEW"]
         if flagged:
             st.markdown("---")
-            st.markdown("**원칙별 판정 상세** — 구성요건 코드·제외 항목 포함 (감사 추적용)")
+            st.markdown("**원칙별 판정 상세**")
             for v in flagged:
-                st.markdown(f"- **{v['principle']}**: {v['reason']}")
+                st.markdown(f"**{VERDICT_STYLE[v['verdict']][0]} {v['principle']}**")
+                render_reason(v["reason"])
+        st.caption("감사 기록 원본은 로그 파일 참조")
 
     st.divider()
 
