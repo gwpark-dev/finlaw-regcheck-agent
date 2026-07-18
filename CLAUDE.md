@@ -22,7 +22,7 @@ University course project (AI 핀테크 Agent 분석과 설계), 5-week build: W
 | W07 | 6-principle verdict engine (Tool) + inspection-history Memory | **Done** — judge v2.1 + gpt-4.1 (ADR-006). 평가셋 31건/186셀: 정확도 **0.903**, 오탐률 **0.096**, 재현율 1.00, 스키마 100%, 8~13초/건. 홀드아웃 12건에서도 목표 유지(0.917 / 0.076) — 과적합 없음 |
 | W08 ★ | Guardrails (PII masking, no-evidence hold, false-positive control) + audit logging | **Done** — DoD 3항목 통과(마스킹 100%, 지식베이스 외 인용 0건, 전 요청 로그). 인용 중복 게이트로 오탐률 0.096→**0.018**(홀드아웃 0.076→**0.000**). 판정 캐시로 NFR-07 충족 |
 | W09 | On-premise architecture design doc | **Done** — 설계 문서(3티어·경계·로그 정책) + 전환 PoC 실측(ADR-009). 임베딩 로컬 대체 가능(bge-m3 recall@5 **0.90**), 판정 LLM은 **CPU 서빙 불가**(qwen2.5:7b가 judge_v2.1 출력 폭주 → OOM) → **Tier 2는 GPU 전제** |
-| W10 | Streamlit demo | |
+| W10 | Streamlit demo | **Done** — `app.py`(check() 소비자, 파이프라인 무수정). 입력→6원칙 리포트 E2E, 유형 필수(ADR-008)·캐시 배지·force_recheck·이력 탭. 시연 3종 검증(위반=광고 규제 VIOLATION / 정상=전원칙 OK / 보류=게이트 4원칙 NEEDS_REVIEW). 대본 `docs/W10_데모_시나리오.md`, 문구 `data/demo/` |
 
 **W07 → W08 인계 항목 (처리 결과)**
 
