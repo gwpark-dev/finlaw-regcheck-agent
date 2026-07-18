@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 
 import streamlit as st
@@ -25,6 +26,41 @@ VERDICT_STYLE = {
     "OK": ("🟢", "#27ae60", "문제 없음"),
     "NEEDS_REVIEW": ("🟡", "#e67e22", "판정 보류"),
 }
+
+# judge가 만든 사유 문자열(judge.py _decide, 동결)을 표시용으로 분해한다. judge 출력은
+# 건드리지 않고 UI에서 파싱만 한다 — "구성요건 충족: [F1] 설명… (인용: "…") / [F3] …"
+# 또는 "판단불가 … 필요: [E6] … / [E1] …" 형태.
+_PREFIXES = ("구성요건 충족: ", "판단불가 구성요건 있음 → 사람 검토 필요: ")
+_DROPPED_RE = re.compile(r"\s*\(상품군 불일치로 제외된 구성요건:\s*(.+?)\)\s*$")
+_QUOTE_RE = re.compile(r'\s*\(인용:\s*"(.*)"\)\s*$', re.S)
+
+
+def parse_elements(reason: str) -> tuple[list[dict] | None, str | None]:
+    """사유 문자열 → (구성요건 항목 리스트|None, 상품군 제외 주석|None).
+
+    항목: {"finding": 사람이 읽는 문장, "quote": 인용문 | ""(누락형) | None(판단불가)}.
+    코드([F1] 등)는 감사용이라 여기서 떼어 반환하지 않는다(호출부가 원문에서 별도 표시).
+    포맷이 아니면 (None, ...) — 호출부가 원문을 그대로 보여준다.
+    """
+    dropped = None
+    m = _DROPPED_RE.search(reason)
+    if m:
+        dropped, reason = m.group(1), reason[: m.start()]
+
+    prefix = next((p for p in _PREFIXES if reason.startswith(p)), None)
+    if prefix is None:
+        return None, dropped
+
+    body = reason[len(prefix):]
+    items = []
+    for part in re.split(r"\s*/\s*(?=\[\w+\])", body):  # " / [코드]" 경계에서만 분리
+        part = re.sub(r"^\[\w+\]\s*", "", part.strip())  # 선두 [코드] 제거(본문에선 숨김)
+        qm = _QUOTE_RE.search(part)
+        if qm:
+            items.append({"finding": part[: qm.start()].strip(), "quote": qm.group(1)})
+        else:
+            items.append({"finding": part, "quote": None})
+    return (items or None), dropped
 
 st.set_page_config(page_title="RegCheck — 금소법 컴플라이언스 점검", page_icon="⚖️", layout="wide")
 
@@ -65,7 +101,16 @@ def render_verdict_card(v: dict) -> None:
             f"</div>",
             unsafe_allow_html=True,
         )
-        st.write(v["reason"])
+        items, _dropped = parse_elements(v["reason"])
+        if items:
+            for it in items:
+                st.markdown(f"- {it['finding']}")
+                if it["quote"]:
+                    st.markdown(f"> {it['quote']}")  # 인용문은 인용 블록으로 구분
+                elif it["quote"] == "":
+                    st.caption("↳ 문구에 해당 내용 없음")  # 누락형 위반
+        else:
+            st.write(v["reason"])  # 구조화 포맷이 아닌 사유는 원문 그대로
 
         if v["evidence"]:
             with st.expander(f"근거 조항 {len(v['evidence'])}건", expanded=v["verdict"] == "VIOLATION"):
@@ -76,7 +121,7 @@ def render_verdict_card(v: dict) -> None:
             st.caption("근거 조항 인용 없음")
 
         if v["verdict"] == "NEEDS_REVIEW":
-            st.info("👤 **사람 검토 필요 (UC-5)** — 도구가 확정하지 못한 건입니다. 준법감시 담당자가 최종 판단합니다.", icon="ℹ️")
+            st.info("👤 **사람 검토 필요** — 도구가 확정하지 못한 건입니다. 준법감시 담당자가 최종 판단합니다.", icon="ℹ️")
         if v["verdict"] == "VIOLATION" and v["suggestion"]:
             st.markdown(f"**수정안:** {v['suggestion']}")
 
@@ -95,7 +140,7 @@ def render_report() -> None:
     cols[2].metric("문제 없음", len(groups["OK"]))
     with cols[3]:
         if ui.get("cache_hit"):
-            st.success(f"캐시된 판정 (동일 문구 재검사) · {ui['elapsed']*1000:.0f}ms — 재현성(NFR-07)", icon="⚡")
+            st.success(f"캐시된 판정 (동일 문구 재검사) · {ui['elapsed']*1000:.0f}ms — 동일 문구엔 동일 판정", icon="⚡")
         elif ui.get("forced"):
             st.warning(f"재판정 (force_recheck) · {ui['elapsed']:.1f}초 — 감사 로그에 기록됨", icon="♻️")
         else:
@@ -103,11 +148,17 @@ def render_report() -> None:
 
     st.caption(f"유형: **{report['input_type']}** · 상품군: **{report['product_category']}**")
 
-    # 기술 정보는 감사 대응 때만 필요 — 검수 화면에서는 접어둔다 (NFR-07)
+    # 기술 정보·구성요건 코드는 감사 대응 때만 필요 — 검수 화면에서는 접어둔다 (NFR-07)
     with st.expander("판정 정보 (감사 대응용)"):
         st.markdown(f"**판정 모델:** `{report['meta']['model']}` — 위반 여부를 판단한 AI 모델")
         st.markdown(f"**판정 기준 버전:** `{report['meta']['prompt_version']}` — 같은 버전에서는 같은 문구에 같은 결과 보장")
         st.markdown(f"**문구 식별번호:** `{report['input_hash'][:12]}…` — 감사 기록에서 이 점검을 찾을 때 쓰는 번호")
+        flagged = groups["VIOLATION"] + groups["NEEDS_REVIEW"]
+        if flagged:
+            st.markdown("---")
+            st.markdown("**원칙별 판정 상세** — 구성요건 코드·제외 항목 포함 (감사 추적용)")
+            for v in flagged:
+                st.markdown(f"- **{v['principle']}**: {v['reason']}")
 
     st.divider()
 
@@ -126,7 +177,7 @@ def render_report() -> None:
                 render_verdict_card(v)
 
     st.divider()
-    if st.button("♻️ 재판정 (force_recheck)", help="캐시를 무시하고 다시 판정합니다. 이 사실은 감사 로그에 남습니다 (ADR-007)."):
+    if st.button("♻️ 재판정 (force_recheck)", help="캐시를 무시하고 다시 판정합니다. 이 사실은 감사 로그에 남습니다."):
         with st.spinner("재판정 중… (원칙별 판정 6회)"):
             run_check(st.session_state.last_text, st.session_state.last_type, force=True)
         st.rerun()
@@ -155,7 +206,7 @@ with tab_check:
     with c2:
         st.write("")
         if text.strip():
-            st.caption(f"분류기 제안: 유형 **{suggested['type']}** · 상품군 **{suggested['product']}** (ADR-008: 유형은 사용자 확정)")
+            st.caption(f"분류기 제안: 유형 **{suggested['type']}** · 상품군 **{suggested['product']}** — 제안은 참고용이며 유형 선택은 검수자가 확정합니다")
             if input_type != suggested["type"]:
                 st.warning(f"⚠️ 분류기 제안({suggested['type']})과 선택({input_type})이 다릅니다. 선택하신 값으로 판정합니다.", icon="⚠️")
 
@@ -172,7 +223,7 @@ with tab_check:
         render_report()
 
 with tab_history:
-    st.subheader("최근 점검 이력 (UC-4)")
+    st.subheader("최근 점검 이력")
     n = st.slider("표시 건수", 3, 20, 5)
     history = memory.recent(n)
     if not history:
