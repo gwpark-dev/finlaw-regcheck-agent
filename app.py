@@ -62,7 +62,7 @@ def render_verdict_card(v: dict) -> None:
             f"<div style='border-left:5px solid {color};padding-left:10px'>"
             f"<b>{emoji} {v['principle']}</b> — "
             f"<span style='color:{color};font-weight:600'>{v['verdict']} ({label})</span>"
-            f" · conf {v['confidence']:.2f}</div>",
+            f"</div>",
             unsafe_allow_html=True,
         )
         st.write(v["reason"])
@@ -84,35 +84,46 @@ def render_verdict_card(v: dict) -> None:
 def render_report() -> None:
     report = st.session_state.report
     ui = st.session_state.meta_ui
-    verdicts = report["verdicts"]
+    # 심각도 순으로 묶는다 — 검수자는 문제 있는 것부터 봐야 한다.
+    groups = {k: [v for v in report["verdicts"] if v["verdict"] == k]
+              for k in ("VIOLATION", "NEEDS_REVIEW", "OK")}
 
-    n_viol = sum(1 for v in verdicts if v["verdict"] == "VIOLATION")
-    n_review = sum(1 for v in verdicts if v["verdict"] == "NEEDS_REVIEW")
-
-    # 요약 배지 줄
+    # 요약 지표 + 판정 상태 배지 (이모지는 icon= 한 곳에서만 — 문자열에는 넣지 않는다)
     cols = st.columns([1, 1, 1, 3])
-    cols[0].metric("위반 소지", n_viol)
-    cols[1].metric("판정 보류", n_review)
-    cols[2].metric("정상", 6 - n_viol - n_review)
+    cols[0].metric("위반 소지", len(groups["VIOLATION"]))
+    cols[1].metric("검토 필요", len(groups["NEEDS_REVIEW"]))
+    cols[2].metric("문제 없음", len(groups["OK"]))
     with cols[3]:
         if ui.get("cache_hit"):
-            st.success(f"⚡ 캐시된 판정 (동일 문구 재검사) · {ui['elapsed']*1000:.0f}ms — 재현성(NFR-07)", icon="⚡")
+            st.success(f"캐시된 판정 (동일 문구 재검사) · {ui['elapsed']*1000:.0f}ms — 재현성(NFR-07)", icon="⚡")
         elif ui.get("forced"):
-            st.warning(f"♻️ 재판정 (force_recheck) · {ui['elapsed']:.1f}초 — 감사 로그에 기록됨", icon="♻️")
+            st.warning(f"재판정 (force_recheck) · {ui['elapsed']:.1f}초 — 감사 로그에 기록됨", icon="♻️")
         else:
-            st.info(f"🆕 신규 판정 · {ui['elapsed']:.1f}초", icon="🆕")
+            st.info(f"신규 판정 · {ui['elapsed']:.1f}초", icon="🆕")
 
-    st.caption(
-        f"유형: **{report['input_type']}** · 상품군: **{report['product_category']}** · "
-        f"model: `{report['meta']['model']}` · prompt: `{report['meta']['prompt_version']}` · "
-        f"input_hash: `{report['input_hash'][:12]}…`"
-    )
+    st.caption(f"유형: **{report['input_type']}** · 상품군: **{report['product_category']}**")
+
+    # 기술 정보는 감사 대응 때만 필요 — 검수 화면에서는 접어둔다 (NFR-07)
+    with st.expander("판정 정보 (감사 대응용)"):
+        st.markdown(f"**판정 모델:** `{report['meta']['model']}` — 위반 여부를 판단한 AI 모델")
+        st.markdown(f"**판정 기준 버전:** `{report['meta']['prompt_version']}` — 같은 버전에서는 같은 문구에 같은 결과 보장")
+        st.markdown(f"**문구 식별번호:** `{report['input_hash'][:12]}…` — 감사 기록에서 이 점검을 찾을 때 쓰는 번호")
 
     st.divider()
-    left, right = st.columns(2)
-    for i, v in enumerate(verdicts):
-        with (left if i % 2 == 0 else right):
+
+    # 위반·검토 섹션은 항상 펼침, 문제 없음은 접어서 개수만 — 카드 없는 섹션은 숨김
+    if groups["VIOLATION"]:
+        st.markdown("#### 🔴 위반 소지")
+        for v in groups["VIOLATION"]:
             render_verdict_card(v)
+    if groups["NEEDS_REVIEW"]:
+        st.markdown("#### 🟡 검토 필요")
+        for v in groups["NEEDS_REVIEW"]:
+            render_verdict_card(v)
+    if groups["OK"]:
+        with st.expander(f"🟢 문제 없음 {len(groups['OK'])}건"):
+            for v in groups["OK"]:
+                render_verdict_card(v)
 
     st.divider()
     if st.button("♻️ 재판정 (force_recheck)", help="캐시를 무시하고 다시 판정합니다. 이 사실은 감사 로그에 남습니다 (ADR-007)."):
