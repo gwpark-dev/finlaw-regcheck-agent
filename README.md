@@ -1,4 +1,4 @@
-# RegulationCheck(구 RegCheck) — 금소법 컴플라이언스 점검 Agent
+# RegulationCheck — 금소법 컴플라이언스 점검 Agent
 
 금융상품 광고·상담 문구의 **금융소비자보호법(금소법) 6대 판매규제 위반**을 근거 조항 인용과
 함께 자동 점검하는 **RAG 기반 컴플라이언스 Agent**. AI는 1차 스크리닝만 하고, 최종 판단은
