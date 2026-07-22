@@ -1,4 +1,4 @@
-"""RegCheck Streamlit 데모 (W10, FR-12).
+"""RegulationCheck Streamlit 데모 (W10, FR-12).
 
 문구 입력 → 6대 원칙 위반 리포트. UI는 파이프라인의 **소비자**다 — 마스킹·판정·인용
 검증·게이트·로깅은 전부 agent.pipeline.check()가 하고, 여기서는 렌더링만 한다.
@@ -66,7 +66,7 @@ def parse_elements(reason: str) -> tuple[list[dict] | None, str | None]:
             items.append({"finding": part, "quote": None})
     return (items or None), dropped
 
-st.set_page_config(page_title="RegCheck — 금소법 컴플라이언스 점검", page_icon="⚖️", layout="wide")
+st.set_page_config(page_title="RegulationCheck — 금소법 컴플라이언스 점검", page_icon="⚖️", layout="wide")
 
 
 def _secret(key: str) -> str | None:
@@ -92,7 +92,7 @@ def _gate() -> None:
     expected = _secret("DEMO_PASSWORD")
     if not expected or st.session_state.get("authed"):
         return
-    st.title("⚖️ RegCheck")
+    st.title("⚖️ RegulationCheck")
     pw = st.text_input("접속 비밀번호", type="password")
     if pw == expected:
         st.session_state.authed = True
@@ -358,7 +358,7 @@ def render_report() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-st.title("⚖️ RegCheck")
+st.title("⚖️ RegulationCheck")
 st.caption("금소법 6대 판매규제 컴플라이언스 1차 점검 — AI 스크리닝, 최종 판단은 사람 (Human-in-the-loop)")
 
 tab_check, tab_history = st.tabs(["🔍 점검", "📜 점검 이력"])

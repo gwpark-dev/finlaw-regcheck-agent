@@ -8,6 +8,8 @@ Project-specific context for Claude Code. Merges with the global guidelines at `
 
 RegCheck — 금소법(금융소비자보호법) compliance-checking RAG agent. Takes financial-product ad copy or consultation scripts and flags potential violations of the 6대 판매규제, citing the exact legal articles as evidence and suggesting revisions. Internal (B2B) tool concept; AI does first-pass screening, humans make the final call.
 
+> **표기명 규칙** (2026-07-22): 제품 표기명은 **RegulationCheck** (RAG와의 혼동 방지). 코드 식별자·폴더명(`regcheck/`)·저장소명(`finlaw-regcheck-agent`)·모듈 경로는 **regcheck**로 유지한다 — 배포·이력 연속성. 문서에 남은 "RegCheck"는 대체로 결정 시점 기록(ADR 등)이거나 파일 경로다.
+
 University course project (AI 핀테크 Agent 분석과 설계), 5-week build: W06–W10.
 
 **Primary spec**: `docs/RegCheck_프로젝트명세서.md` — the top-priority reference. Modify only with explicit reasoning. No silent drift from spec.

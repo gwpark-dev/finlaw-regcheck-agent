@@ -1,4 +1,4 @@
-# RegCheck — 금소법 컴플라이언스 점검 Agent
+# RegulationCheck(구 RegCheck) — 금소법 컴플라이언스 점검 Agent
 
 금융상품 광고/상담 문구의 금융소비자보호법 위반 소지를 근거 조항과 함께 점검하는 RAG Agent.
 자세한 요구사항은 상위 폴더의 `RegCheck_프로젝트명세서.md` 참고.
