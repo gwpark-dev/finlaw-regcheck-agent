@@ -1,0 +1,10 @@
+[theme]
+base = "light"
+primaryColor = "#c0392b"
+
+[server]
+# 업로드 없는 데모라 요청 크기 제한을 낮춘다.
+maxUploadSize = 5
+
+[browser]
+gatherUsageStats = false

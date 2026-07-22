@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import html
 import json
+import os
 import re
 import time
 
@@ -66,6 +67,42 @@ def parse_elements(reason: str) -> tuple[list[dict] | None, str | None]:
     return (items or None), dropped
 
 st.set_page_config(page_title="RegCheck — 금소법 컴플라이언스 점검", page_icon="⚖️", layout="wide")
+
+
+def _secret(key: str) -> str | None:
+    """st.secrets에서 값을 읽되, secrets.toml이 없는 로컬에선 조용히 None.
+    (st.secrets 접근은 파일 부재 시 예외를 던지므로 감싼다.)"""
+    try:
+        return st.secrets.get(key)
+    except Exception:
+        return None
+
+
+# API 키 로드 순서: 기존 .env 방식이 우선(로컬), 없을 때만 st.secrets로 폴백(클라우드).
+# judge/ingest가 호출 시점에 load_dotenv(override=False)로 .env를 읽으므로, env가 비었을
+# 때만 secrets 값을 승격해 두면 로컬 .env 동작에는 영향이 없다.
+if not os.environ.get("OPENAI_API_KEY"):
+    _key = _secret("OPENAI_API_KEY")
+    if _key:
+        os.environ["OPENAI_API_KEY"] = _key
+
+
+def _gate() -> None:
+    """DEMO_PASSWORD가 secrets에 설정돼 있으면 비밀번호를 요구. 미설정(로컬)이면 통과."""
+    expected = _secret("DEMO_PASSWORD")
+    if not expected or st.session_state.get("authed"):
+        return
+    st.title("⚖️ RegCheck")
+    pw = st.text_input("접속 비밀번호", type="password")
+    if pw == expected:
+        st.session_state.authed = True
+        st.rerun()
+    if pw:
+        st.error("비밀번호가 올바르지 않습니다.")
+    st.stop()
+
+
+_gate()
 
 # 세션 1개를 Streamlit 세션 동안 유지 — 점검 이력이 같은 session_id로 쌓인다.
 if "session" not in st.session_state:

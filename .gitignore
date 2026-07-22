@@ -11,10 +11,13 @@ wheels/
 
 # 비밀정보 (NFR-06)
 .env
+# Streamlit secrets(로컬 secrets.toml에 실키가 들어갈 수 있음) — config.toml만 커밋한다
+.streamlit/secrets.toml
 
 # 빌드 산출물 — ingest 재실행으로 복원 가능
-data/index/
 data/cache/
+# data/index/는 시연 배포(Streamlit Cloud)를 위해 커밋한다 — 클라우드에서 ingest 없이 검색.
+# 재빌드는 uv run python -m rag.ingest. 공개/합성 데이터라 반출 이슈 없음.
 
 # W09 PoC 로컬 인덱스(bge-m3) — w09_poc_embed.py 재실행으로 복원 가능
 data/index_poc/
