@@ -397,7 +397,7 @@ with tab_check:
         render_report()
 
 with tab_history:
-    st.subheader("최근 점검 이력")
+    st.subheader("최근 점검 이력", anchor=False)
     n = st.slider("표시 건수", 3, 20, 5)
     history = memory.recent(n)
     if not history:
