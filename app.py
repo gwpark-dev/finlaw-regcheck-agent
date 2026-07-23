@@ -25,11 +25,21 @@ from agent.pipeline import INPUT_TYPES, PipelineError, check, suggest_input_type
 from guardrails.masking import mask
 from rag.config import META_PATH, PRINCIPLES
 
+# 판정별 컬러 pill 스타일 (이모지 대신 색 pill로 통일). 여기 값은 전부 내부 enum·정적
+# 문구라 사용자 입력이 아니다 — HTML 주입은 스타일에만, 사용자 문구는 위젯 경로 유지.
 VERDICT_STYLE = {
-    "VIOLATION": ("🔴", "#c0392b", "위반 소지"),
-    "OK": ("🟢", "#27ae60", "문제 없음"),
-    "NEEDS_REVIEW": ("🟡", "#e67e22", "판정 보류"),
+    "VIOLATION": {"label": "위반 소지", "fg": "#D91C29", "bg": "#FEECEC"},
+    "NEEDS_REVIEW": {"label": "검토 필요", "fg": "#B25E09", "bg": "#FFF7E6"},
+    "OK": {"label": "문제 없음", "fg": "#0E8A3E", "bg": "#E9F9EF"},
 }
+_DEFAULT_STYLE = {"label": "", "fg": "#6B7684", "bg": "#F5F7FA"}
+
+
+def verdict_pill(verdict: str) -> str:
+    """판정 코드 → 컬러 pill HTML span. verdict는 내부 enum이지만 방어적으로 escape."""
+    s = VERDICT_STYLE.get(verdict, {**_DEFAULT_STYLE, "label": verdict})
+    return (f"<span class='verdict-pill' style='background:{s['bg']};color:{s['fg']}'>"
+            f"{html.escape(s['label'])}</span>")
 
 # judge가 만든 사유 문자열(judge.py _decide, 동결)을 표시용으로 분해한다. judge 출력은
 # 건드리지 않고 UI에서 파싱만 한다 — "구성요건 충족: [F1] 설명… (인용: "…") / [F3] …"
@@ -67,6 +77,95 @@ def parse_elements(reason: str) -> tuple[list[dict] | None, str | None]:
     return (items or None), dropped
 
 st.set_page_config(page_title="RegulationCheck — 금소법 컴플라이언스 점검", page_icon="⚖️", layout="wide")
+
+# --- 핀테크 클린 라이트 스타일 (시각 스타일만; 기능·구조 무관) ---------------------
+# span/div를 전역으로 건드리지 않는다 — Streamlit 아이콘 폰트(Material Symbols)가 깨지므로
+# 폰트는 루트·마크다운·폼 위젯에만 적용하고 아이콘 요소는 상속으로 두지 않는다.
+st.markdown(
+    """
+    <style>
+    @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css');
+
+    .stApp, .stApp [data-testid="stMarkdownContainer"],
+    .stApp button, .stApp input, .stApp textarea, .stApp select {
+        font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui,
+                     'Segoe UI', 'Malgun Gothic', sans-serif;
+    }
+
+    /* 최대 폭 900px 중앙 정렬 + 넉넉한 여백 */
+    [data-testid="stMainBlockContainer"] {
+        max-width: 900px;
+        padding-top: 2.5rem;
+        padding-bottom: 4rem;
+    }
+
+    /* 카드 (st.container(border=True)) */
+    [data-testid="stVerticalBlockBorderWrapper"] {
+        background: #FFFFFF;
+        border: 1px solid #E5E8EB !important;
+        border-radius: 14px !important;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+        transition: box-shadow .18s ease;
+    }
+    [data-testid="stVerticalBlockBorderWrapper"]:hover {
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.10);
+    }
+
+    /* 판정 배지(pill) */
+    .verdict-pill {
+        display: inline-block;
+        padding: 3px 12px;
+        border-radius: 999px;
+        font-size: 13px;
+        font-weight: 600;
+        line-height: 1.5;
+        white-space: nowrap;
+    }
+    .verdict-head { display: flex; align-items: center; gap: 10px; margin-bottom: 2px; }
+    .verdict-principle { font-size: 17px; font-weight: 700; color: #191F28; }
+    .section-head { display: flex; align-items: center; gap: 10px; margin: 6px 0 2px; }
+    .section-head .section-title { font-size: 16px; font-weight: 700; color: #191F28; }
+
+    /* 요약 지표: 숫자 크게 + 라벨 작게, 카드형 3분할 */
+    .metric-row { display: flex; gap: 14px; margin: 4px 0 8px; }
+    .metric-card {
+        flex: 1;
+        background: #F5F7FA;
+        border: 1px solid #E5E8EB;
+        border-radius: 14px;
+        padding: 16px 18px;
+        text-align: center;
+    }
+    .metric-num { font-size: 30px; font-weight: 800; line-height: 1.15; }
+    .metric-label { font-size: 13px; color: #6B7684; margin-top: 4px; }
+
+    /* 근거 조항 인용문 blockquote */
+    .stApp [data-testid="stMarkdownContainer"] blockquote {
+        border-left: 3px solid #1B64DA;
+        background: #F5F7FA;
+        border-radius: 0 8px 8px 0;
+        padding: 8px 14px;
+        margin: 6px 0;
+        color: #4E5968;
+    }
+
+    /* 버튼: primaryColor 채움은 테마가, radius·호버는 여기서 */
+    .stButton > button {
+        border-radius: 10px;
+        font-weight: 600;
+        transition: filter .15s ease;
+    }
+    .stButton > button:hover { filter: brightness(0.93); }
+
+    /* 섹션 간 여백 */
+    [data-testid="stMainBlockContainer"] hr { margin: 32px 0; }
+
+    /* 제목 영역 */
+    h1 { font-weight: 800; letter-spacing: -0.5px; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 
 def _secret(key: str) -> str | None:
@@ -218,7 +317,7 @@ def format_clause(text: str) -> str:
 
 def _clause(text: str, highlight: bool = False) -> None:
     body = format_clause(text)
-    style = "border-left:3px solid #c0392b;padding-left:8px;font-weight:600;" if highlight else ""
+    style = "border-left:3px solid #D91C29;padding-left:8px;font-weight:600;" if highlight else ""
     st.markdown(f"<div style='margin:.3em 0;{style}'>{body}</div>", unsafe_allow_html=True)
 
 
@@ -286,13 +385,10 @@ def render_reason(reason: str) -> None:
 
 
 def render_verdict_card(v: dict) -> None:
-    emoji, color, label = VERDICT_STYLE.get(v["verdict"], ("⚪", "#7f8c8d", v["verdict"]))
     with st.container(border=True):
         st.markdown(
-            f"<div style='border-left:5px solid {color};padding-left:10px'>"
-            f"<b>{emoji} {v['principle']}</b> — "
-            f"<span style='color:{color};font-weight:600'>{v['verdict']} ({label})</span>"
-            f"</div>",
+            f"<div class='verdict-head'>{verdict_pill(v['verdict'])}"
+            f"<span class='verdict-principle'>{html.escape(v['principle'])}</span></div>",
             unsafe_allow_html=True,
         )
         render_reason(v["reason"])
@@ -312,18 +408,27 @@ def render_report() -> None:
     groups = {k: [v for v in report["verdicts"] if v["verdict"] == k]
               for k in ("VIOLATION", "NEEDS_REVIEW", "OK")}
 
-    # 요약 지표 + 판정 상태 배지 (이모지는 icon= 한 곳에서만 — 문자열에는 넣지 않는다)
-    cols = st.columns([1, 1, 1, 3])
-    cols[0].metric("위반 소지", len(groups["VIOLATION"]))
-    cols[1].metric("검토 필요", len(groups["NEEDS_REVIEW"]))
-    cols[2].metric("문제 없음", len(groups["OK"]))
-    with cols[3]:
-        if ui.get("cache_hit"):
-            st.success(f"캐시된 판정 (동일 문구 재검사) · {ui['elapsed']*1000:.0f}ms — 동일 문구엔 동일 판정", icon="⚡")
-        elif ui.get("forced"):
-            st.warning(f"재판정 (force_recheck) · {ui['elapsed']:.1f}초 — 감사 로그에 기록됨", icon="♻️")
-        else:
-            st.info(f"신규 판정 · {ui['elapsed']:.1f}초", icon="🆕")
+    # 요약 지표: 카드형 3분할 (값은 정수 카운트 — HTML 주입 안전). 이모지는 icon= 한 곳에서만.
+    metrics = [
+        ("위반 소지", len(groups["VIOLATION"]), "#D91C29"),
+        ("검토 필요", len(groups["NEEDS_REVIEW"]), "#B25E09"),
+        ("문제 없음", len(groups["OK"]), "#0E8A3E"),
+    ]
+    cards = "".join(
+        f"<div class='metric-card'>"
+        f"<div class='metric-num' style='color:{c}'>{n}</div>"
+        f"<div class='metric-label'>{lbl}</div></div>"
+        for lbl, n, c in metrics
+    )
+    st.markdown(f"<div class='metric-row'>{cards}</div>", unsafe_allow_html=True)
+
+    # 판정 상태 배지
+    if ui.get("cache_hit"):
+        st.success(f"캐시된 판정 (동일 문구 재검사) · {ui['elapsed']*1000:.0f}ms — 동일 문구엔 동일 판정", icon="⚡")
+    elif ui.get("forced"):
+        st.warning(f"재판정 (force_recheck) · {ui['elapsed']:.1f}초 — 감사 로그에 기록됨", icon="♻️")
+    else:
+        st.info(f"신규 판정 · {ui['elapsed']:.1f}초", icon="🆕")
 
     st.caption(f"유형: **{report['input_type']}** · 상품군: **{report['product_category']}**")
 
@@ -337,16 +442,24 @@ def render_report() -> None:
     st.divider()
 
     # 위반·검토 섹션은 항상 펼침, 문제 없음은 접어서 개수만 — 카드 없는 섹션은 숨김
+    def section_head(verdict: str, count: int) -> None:
+        label = VERDICT_STYLE[verdict]["label"]
+        st.markdown(
+            f"<div class='section-head'>{verdict_pill(verdict)}"
+            f"<span class='section-title'>{label} {count}건</span></div>",
+            unsafe_allow_html=True,
+        )
+
     if groups["VIOLATION"]:
-        st.markdown("#### 🔴 위반 소지")
+        section_head("VIOLATION", len(groups["VIOLATION"]))
         for v in groups["VIOLATION"]:
             render_verdict_card(v)
     if groups["NEEDS_REVIEW"]:
-        st.markdown("#### 🟡 검토 필요")
+        section_head("NEEDS_REVIEW", len(groups["NEEDS_REVIEW"]))
         for v in groups["NEEDS_REVIEW"]:
             render_verdict_card(v)
     if groups["OK"]:
-        with st.expander(f"🟢 문제 없음 {len(groups['OK'])}건"):
+        with st.expander(f"문제 없음 {len(groups['OK'])}건"):
             for v in groups["OK"]:
                 render_verdict_card(v)
 
@@ -359,7 +472,12 @@ def render_report() -> None:
 
 # ─────────────────────────────────────────────────────────────────────────────
 st.title("⚖️ RegulationCheck")
-st.caption("금소법 6대 판매규제 컴플라이언스 1차 점검 — AI 스크리닝, 최종 판단은 사람 (Human-in-the-loop)")
+st.markdown(
+    "<div style='color:#6B7684;font-size:15px;margin:-8px 0 8px'>"
+    "금소법 6대 판매규제 컴플라이언스 1차 점검 — AI 스크리닝, 최종 판단은 사람 (Human-in-the-loop)"
+    "</div>",
+    unsafe_allow_html=True,
+)
 
 tab_check, tab_history = st.tabs(["🔍 점검", "📜 점검 이력"])
 
@@ -380,7 +498,17 @@ with tab_check:
     with c2:
         st.write("")
         if text.strip():
-            st.caption(f"분류기 제안: 유형 **{suggested['type']}** · 상품군 **{suggested['product']}** — 제안은 참고용이며 유형 선택은 검수자가 확정합니다")
+            # 좁은 컬럼에서 한 줄로 두면 어색하게 줄바꿈 → 제안값/안내문을 2줄로 분리.
+            # word-break:keep-all로 한글이 단어 중간에서 끊기지 않게 한다(공백에서만 줄바꿈).
+            # 분류기 값은 방어적으로 escape — 사용자 문구는 위젯 경로 그대로.
+            st.markdown(
+                f"<div style='word-break:keep-all;font-size:14px'>분류기 제안: "
+                f"유형 <b>{html.escape(suggested['type'])}</b> · "
+                f"상품군 <b>{html.escape(suggested['product'])}</b></div>"
+                "<div style='color:#6B7684;font-size:13px;word-break:keep-all;margin-top:2px'>"
+                "제안은 참고용이며 유형 선택은 검수자가 확정합니다</div>",
+                unsafe_allow_html=True,
+            )
             if input_type != suggested["type"]:
                 st.warning(f"⚠️ 분류기 제안({suggested['type']})과 선택({input_type})이 다릅니다. 선택하신 값으로 판정합니다.", icon="⚠️")
 

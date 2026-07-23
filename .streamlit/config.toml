@@ -1,6 +1,9 @@
 [theme]
 base = "light"
-primaryColor = "#c0392b"
+primaryColor = "#1B64DA"          # 신뢰감 있는 금융 블루
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F5F7FA"
+textColor = "#191F28"
 
 [server]
 # 업로드 없는 데모라 요청 크기 제한을 낮춘다.
